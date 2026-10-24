@@ -2,6 +2,12 @@
 
 Archive repository for modified versions of the original game. Only changes introduced in this repository are documented. All other systems, enemies, mechanics and content remain unchanged from the original version.
 
+## Play Online
+ 
+🎮 **Play Valkyria Advance in your browser**
+
+[https://olaelias.github.io/Valkyria-Advance/](https://olaelias.github.io/Valkyria-Advance/)
+
 ## Valkyria5 onion.html
 
 ## Fire Onion
