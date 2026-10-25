@@ -15,29 +15,52 @@ p{margin:0;color:var(--dim);font-size:13px;text-align:center;padding:0 12px}
 </head>
 <body>
 <canvas id="c" width="512" height="384"></canvas>
-<p>Piltangenter eller WASD. Hitta nyckeln i sidorummet, gå sedan till utgången. Håll Mellanslag eller J för magi (salvor om tre). R = ny bana. M = ljud av/på, N = musik av/på.</p>
+<p>Piltangenter eller WASD. Gå in i en portal på världskartan för att börja en bana. I banan: hitta nyckeln i sidorummet, gå sedan till utgången. Håll Mellanslag eller J för magi (salvor om tre). R = ny bana. Q = meny (tillbaka till världskartan). M = ljud av/på, N = musik av/på.</p>
 <script>
 const T=32,W=16,H=12,cv=document.getElementById('c'),g=cv.getContext('2d');
 
 // ===== TESTPARAMETER =====
-// START_LEVEL: vilken rad i startmenyn som är förvald första gången (närmaste rad i menyn som inte är högre). Skriv ett heltal 1-99.
-// Själva startbanan väljs numera i startmenyn. Ska vara 1 i det riktiga spelet.
+// START_LEVEL: reservvärde för bannivå. Banorna väljs numera via portalerna på världskartan (se PORTAL_LV). Ska vara 1.
 const START_LEVEL=1;
 let START=Math.min(99,Math.max(1,START_LEVEL|0));
-let started=false; // false = visa startskärmen (eller startmenyn) tills spelet startas
-// ---------- startmeny: visas efter startskärmen och vid game over ----------
-let menu=false; // true = startmenyn visas
-const MENU=[1,10,20,30,40,50,60,70,80,90]; // valbara startbanor
-const MENU_Y=70,MENU_DY=28,MENU_X0=150,MENU_X1=362; // menyns läge på canvas (rader)
-let sel=Math.max(0,MENU.filter(v=>v<=START).length-1); // markerad rad; minns senaste valet
-function menuKey(c){
-  if(!menu){menu=true;return} // första tangenten på startskärmen öppnar bara menyn
-  if(c==='ArrowUp'||c==='KeyW')sel=(sel+MENU.length-1)%MENU.length;
-  else if(c==='ArrowDown'||c==='KeyS')sel=(sel+1)%MENU.length;
-  else beginGame(MENU[sel]);
+let started=false; // false = visa startskärmen tills spelet startas (första tangenten leder till världskartan)
+// ---------- världskartan: en bana som alla andra men utan fiender, med portaler till banorna ----------
+const PORTAL_LV=[1,10,20,30,40,50,60,70,80,90]; // banor som portalerna på världskartan leder till (en portal per bana, slumpade rum)
+let WORLD=null,lastPortal=null; // lastPortal: portalen spelaren senast gick in genom (dit man återvänder via Q-menyn) // världskartan skapas första gången den behövs och finns sedan kvar hela sessionen
+function toWorld(at){ // startar/återvänder till världskartan: utan 'at' i startrummet (första tangenten, game over), med 'at' (en portal) vid grottans öppning
+  if(!WORLD)buildWorld();
+  L=WORLD;L.rx=at?at.rx:0;L.ry=at?at.ry:0;started=true;qmenu=false;
+  P.dead=false;P.won=false;P.max=6;P.hp=12;P.moving=false;P.kx=P.ky=0;P.inv=0;P.x=at?at.x:W*T/2;P.y=at?at.y+T:H*T/2;if(at)P.dir=2;clr(); // en ruta nedanför portalen, vänd nedåt
+}
+// ---------- Q: paus/avbryt-meny i banorna (samma stil som den gamla startmenyn) ----------
+const QROWS=['Fortsätt i grottan','Återgå till världskartan'];
+const QY=160,QDY=28,QX0=130,QX1=382; // radernas läge på canvas
+let qmenu=false,qsel=0; // qmenu: menyn är öppen och spelet står stilla
+function qChoose(){if(qsel===1)toWorld(lastPortal);qmenu=false}
+function qKey(c){
+  if(c==='KeyQ'||c==='Escape')qmenu=false; // Q igen = fortsätt
+  else if(c==='ArrowUp'||c==='KeyW'||c==='ArrowDown'||c==='KeyS')qsel=(qsel+1)%QROWS.length;
+  else if(c==='Enter'||c==='Space'||c==='KeyJ'||c==='KeyZ'||c==='KeyX')qChoose(); // bara bekräftelsetangenter, så en gångtangent inte väljer av misstag
+}
+const qRow=e=>{const r=cv.getBoundingClientRect(),x=(e.clientX-r.left)*cv.width/r.width,y=(e.clientY-r.top)*cv.height/r.height,i=Math.floor((y-QY)/QDY);return x>=QX0&&x<=QX1&&i>=0&&i<QROWS.length?i:-1};
+function drawQMenu(){
+  g.fillStyle='rgba(0,0,0,.62)';g.fillRect(0,0,cv.width,cv.height);
+  g.fillStyle='rgba(20,16,40,.96)';g.fillRect(116,104,280,128);g.strokeStyle='#3a2f52';g.lineWidth=2;g.strokeRect(116,104,280,128);
+  g.textAlign='center';
+  g.fillStyle='#ffd84a';g.font='italic bold 24px Georgia,"Times New Roman",serif';g.fillText('Paus',cv.width/2,136);
+  ln('#c79a1e',1.2,170,146,342,146,'butt');poly('#ffd84a',[[256,142],[260,146],[256,150],[252,146]]);
+  QROWS.forEach((v,i)=>{
+    const top=QY+i*QDY,y=top+QDY/2,on=i===qsel;
+    if(on){g.fillStyle='rgba(232,240,255,.14)';g.fillRect(QX0,top+1,QX1-QX0,QDY-2);
+      poly('#f4f7ff',[[QX0+6,y-5],[QX0+6,y+5],[QX0+14,y]]);poly('#f4f7ff',[[QX1-6,y-5],[QX1-6,y+5],[QX1-14,y]])}
+    g.font=(on?'bold 15px':'14px')+' "Courier New",monospace';
+    g.fillStyle=on?'#f4f7ff':'#7f8cb8';
+    g.fillText(v,cv.width/2,y+5);
+  });
+  g.textAlign='left';
 }
 function beginGame(lv){
-  START=lv;started=true;menu=false;
+  START=lv;started=true;qmenu=false;sfx.unlock();
   P.dead=false;P.won=false;P.max=6;P.hp=12;P.inv=0;P.moving=false;P.kx=P.ky=0;
   newLevel((Math.random()*1e9)|0,START);P.x=W*T/2;P.y=H*T/2;
 }
@@ -49,7 +72,7 @@ const hash=(s,x,y)=>(s^Math.imul(x+1000,374761393)^Math.imul(y+1000,668265263))>
 // ---------- bana: lista över rum + dörrar, resten räknas fram ----------
 const DIRS=[[0,-1],[1,0],[0,1],[-1,0]];
 let L; // aktuell bana
-function newLevel(seed,lv){clr();
+function newLevel(seed,lv,world){clr();
   const rnd=mulberry32(seed),rooms=new Map(),edges=new Set(),k=(x,y)=>x+','+y;
   const ek=(a,b)=>a<b?a+'|'+b:b+'|'+a;
   function walk(x,y,n){
@@ -68,12 +91,34 @@ function newLevel(seed,lv){clr();
   const from=main[Math.min(3,main.length-2)||0];
   const br=walk(from[0],from[1],3);
   const keyRoom=br.length>1?br[br.length-1]:main[Math.max(1,main.length-3)];
-  L={seed,rooms,edges,ek,k,exit:main[main.length-1],key:keyRoom,hasKey:false,cache:new Map(),seen:new Set(['0,0']),rx:0,ry:0,lv:lv||START};
-  L.theme=pickTheme(seed,L.lv);cv.style.borderColor=THEMES[L.theme].border;
+  L={seed,rooms,edges,ek,k,exit:main[main.length-1],key:keyRoom,hasKey:false,cache:new Map(),seen:new Set(['0,0']),rx:0,ry:0,lv:lv||START,world:!!world};
+  L.theme=world?3:pickTheme(seed,L.lv);cv.style.borderColor=THEMES[L.theme].border;
+  if(world){L.exit=L.key=[99,99];L.portals=[]} // världskartan har varken nyckel eller utgång, bara portaler
 }
 const open=(rx,ry,d)=>L.edges.has(L.ek(L.k(rx,ry),L.k(rx+DIRS[d][0],ry+DIRS[d][1])));
 
-// ---------- rum: 0 golv, 1 fast block, 2 förstörbart block ----------
+// ---------- rum: 0 golv, 1 fast block, 2 förstörbart block, 3-6 världskartans block ----------
+// ===== BLOCKTYPER =====
+// s = blockerar spelaren, p = stoppar skott, d = ritfunktion (px,py,x,y). Typ 1 och 2 ritas av stone() och crumbly().
+// Världskartans typer är än så länge enkla färgade ytor: byt ut d för en typ mot riktig grafik senare, resten av koden påverkas inte.
+const BLK={
+  1:{s:1,p:1},2:{s:1,p:1},
+  3:{s:0,p:0,d:(px,py,x,y)=>{ // gräs: fungerar som golv
+    g.fillStyle=(x+y)%2?'#3f8f3a':'#449541';g.fillRect(px,py,T,T)}},
+  4:{s:1,p:1,d:(px,py,x,y)=>{ // träd: grön krona, liten brun stam, oförstörbart
+    BLK[3].d(px,py,x,y);
+    g.fillStyle='#6b4423';g.fillRect(px+13,py+19,6,11);
+    g.fillStyle='#1d6b2c';g.beginPath();g.arc(px+16,py+13,12,0,7);g.fill()}},
+  5:{s:1,p:1,d:(px,py)=>{ // berg: grått, oförstörbart (som fasta block men annan färg)
+    g.fillStyle='#5c5c6a';g.fillRect(px,py,T,T);
+    g.fillStyle='#8a8a98';g.fillRect(px+2,py+2,T-4,T-4);
+    g.fillStyle='#a8a8b6';g.fillRect(px+4,py+4,T-14,T-14)}},
+  6:{s:1,p:0,d:(px,py)=>{ // vatten: går inte att gå på, men skott flyger över
+    g.fillStyle='#2b6fd1';g.fillRect(px,py,T,T);
+    g.fillStyle='#5b9cf0';g.fillRect(px+5,py+9,11,2);g.fillRect(px+16,py+21,11,2)}}
+};
+const solid=v=>!!v&&BLK[v].s===1;
+const LAND=[4,5,6]; // världskartans oförstörbara landtyper: träd, berg, vatten (används för ytterväggar och landbyper inne i rummen)
 // ===== SVÅRIGHETSÖKNING (fiender per rum) =====
 // Varje ENEMY_STEP:e bana höjs det maximala antalet fiender i slumpen med +1 (bana 1-10 = grundnivå). ENEMY_CAP är absolut tak.
 // ENEMY_BASE_BONUS: extra som läggs på redan från bana 1 (0 = som tidigare; 2 ger t.ex. max 5 i lila och 6 i grönt/rött).
@@ -102,12 +147,24 @@ function room(rx,ry){
     let t=r()<0.4?2:1;
     if(!cells.every(([x,y])=>x>=1&&x<=W-2&&y>=1&&y<=H-2&&!mid(x,y)&&m[y][x]===0))continue;
     if(cells.some(([x,y])=>band(x,y)))t=2;
+    if(L.world&&t===1)t=LAND[Math.floor(r()*LAND.length)]; // världskartan: landbyper (träd/berg/vatten) ersätter de fasta blocken
     cells.forEach(([x,y])=>{m[y][x]=t;if(t===2){const h=1+Math.floor(r()*3);m.hp[y*W+x]=[h,h]}});
     put++;
   }
   
   m.en=[];m.items=[];
-  if(!(rx===0&&ry===0)){ // inga fiender i startrummet
+  if(L.world){ // världskartan: ytterväggen blir sammanhängande sträckor av berg, träd eller vatten (dörrgluggarna lämnas), allt golv blir gräs
+    const sides=[[],[],[],[]];
+    for(let x=0;x<W;x++){sides[0].push([x,0]);sides[1].push([x,H-1])}
+    for(let y=0;y<H;y++){sides[2].push([0,y]);sides[3].push([W-1,y])}
+    for(const sd of sides)for(let i=0;i<sd.length;){
+      const ty=LAND[Math.floor(r()*LAND.length)],len=2+Math.floor(r()*4);
+      for(let j=i;j<Math.min(i+len,sd.length);j++){const [x,y]=sd[j];if(m[y][x]===1)m[y][x]=ty}
+      i+=len;
+    }
+    for(let y=0;y<H;y++)for(let x=0;x<W;x++)if(m[y][x]===0)m[y][x]=3;
+  }
+  if(!(rx===0&&ry===0)&&!L.world){ // inga fiender i startrummet (och inga alls på världskartan)
     const tm=L.theme,bonus=ENEMY_BASE_BONUS+Math.floor(((L.lv||1)-1)/ENEMY_STEP);
     const cnt=Math.min(ENEMY_CAP,Math.max(tm?1:0,Math.floor(r()*(3+bonus))+(r()<.25?1:0)+(tm?1:0))); // teman: fler fiender och minst en av temats typ; max växer med banan
     const pu=tm===1?.7:tm===2?.15:.35; // chans att en extra fiende är sjöborre
@@ -144,20 +201,49 @@ function room(rx,ry){
   L.cache.set(id,m);return m;
 }
 
+// ---------- världskartan: bygg + slumpa ut portaler ----------
+function buildWorld(){
+  newLevel((Math.random()*1e9)|0,1,true);
+  const r=mulberry32(L.seed^0x2545f491),rl=[...L.rooms.keys()].map(s=>s.split(',').map(Number));
+  for(let i=rl.length-1;i>0;i--){const j=Math.floor(r()*(i+1));[rl[i],rl[j]]=[rl[j],rl[i]]} // blanda rummen så portalerna sprids
+  const band=(x,y)=>x===7||x===8||y===5||y===6,mid=(x,y)=>x>=6&&x<=9&&y>=4&&y<=7;
+  const spot=(rx,ry)=>{ // fri gräsyta (3x3) utanför dörrgångarna och rummets mitt, minst 4 rutor från andra portaler i rummet
+    const m=room(rx,ry),here=L.portals.filter(p=>p.rx===rx&&p.ry===ry),cand=[];
+    for(let y=2;y<=H-3;y++)for(let x=2;x<=W-3;x++){
+      if(band(x,y)||mid(x,y))continue;
+      let ok=true;for(let dy=-1;dy<=1&&ok;dy++)for(let dx=-1;dx<=1;dx++)if(m[y+dy][x+dx]!==3){ok=false;break}
+      if(ok&&here.every(p=>Math.hypot(p.x-(x*T+T/2),p.y-(y*T+T/2))>=4*T))cand.push([x,y]);
+    }
+    return cand.length?cand[Math.floor(r()*cand.length)]:null;
+  };
+  PORTAL_LV.forEach((lv,i)=>{
+    for(let k=0;k<rl.length;k++){
+      const [rx,ry]=rl[(i+k)%rl.length],s=spot(rx,ry);
+      if(s){L.portals.push({rx,ry,x:s[0]*T+T/2,y:s[1]*T+T/2,lv});break}
+    }
+  });
+  WORLD=L;
+}
+
 // ---------- spelare ----------
 const P={x:W*T/2,y:H*T/2,dir:2,t:0,moving:false,hs:10,ax:0,ay:1,burst:0,bt:0,cd:0,hp:12,max:6,inv:0,kx:0,ky:0,dead:false,won:false};
 const keys={};let msg='',msgT=0;
 const pv={x:0,y:0}; // spelarens faktiska hastighet (px/s), används för att sikta eldklot
-addEventListener('keydown',e=>{if(!started){if(!e.repeat&&!e.metaKey&&!e.ctrlKey&&!e.altKey){audioInit();e.preventDefault();menuKey(e.code)}return}audioInit();keys[e.code]=true;if(e.code.startsWith('Arrow')||e.code==='Space')e.preventDefault();if(e.code==='KeyR')restart()});
+addEventListener('keydown',e=>{if(!started){if(!e.repeat&&!e.metaKey&&!e.ctrlKey&&!e.altKey){audioInit();e.preventDefault();toWorld()}return}audioInit();
+  if(qmenu){e.preventDefault();if(!e.repeat)qKey(e.code);return}
+  if(e.code==='KeyQ'&&!e.repeat&&!L.world&&!P.dead&&!P.won){e.preventDefault();qmenu=true;qsel=0;return} // Q: meny i en bana
+  keys[e.code]=true;if(e.code.startsWith('Arrow')||e.code==='Space')e.preventDefault();if(e.code==='KeyR')restart()});
 addEventListener('keyup',e=>keys[e.code]=false);
-function restart(){if(P.dead||P.won){started=false;menu=P.dead;return} // game over -> startmenyn direkt, vinst -> startskärmen och sedan menyn
+function restart(){if(P.dead){toWorld();return} // game over -> tillbaka till världskartan
+  if(P.won){started=false;return} // vinst -> startskärmen och sedan världskartan
+  if(L.world)return; // världskartan skapas bara en gång per session
   P.inv=0;newLevel((Math.random()*1e9)|0,L.lv);P.x=W*T/2;P.y=H*T/2}
 const hit=(x,y)=>{
   const m=room(L.rx,L.ry);
   for(const [cx,cy] of [[x-P.hs,y-P.hs],[x+P.hs,y-P.hs],[x-P.hs,y+P.hs],[x+P.hs,y+P.hs]]){
     const tx=Math.floor(cx/T),ty=Math.floor(cy/T);
     if(tx<0||ty<0||tx>=W||ty>=H)continue;
-    if(m[ty][tx])return true;
+    if(solid(m[ty][tx]))return true;
   }return false;
 };
 const SPEED=172;   // pixlar per sekund (tidigare 115)
@@ -202,11 +288,11 @@ function combat(dt){
       const tx=Math.floor(o.x/T),ty=Math.floor(o.y/T);
       if(tx<0||ty<0||tx>=W||ty>=H)continue;
       const v=m[ty][tx];
-      if(v){
+      if(v&&BLK[v].p){
         dead=true;spark(o.x,o.y,8,['#fff','#bfe3ff','#8fc4ff'],140,.3);
         if(v===1&&tx>0&&ty>0&&tx<W-1&&ty<H-1)sfx.ground();
         if(v===2){const key=ty*W+tx,h=m.hp[key];
-          if(h&&--h[0]<=0){sfx.stoneBreak();m[ty][tx]=0;delete m.hp[key];spark(tx*T+T/2,ty*T+T/2,14,['#aa9b82','#8e7f67','#6a5d48','#d2c2a4'],150,.6)}else sfx.stoneHit()}
+          if(h&&--h[0]<=0){sfx.stoneBreak();m[ty][tx]=L.world?3:0;delete m.hp[key];spark(tx*T+T/2,ty*T+T/2,14,['#aa9b82','#8e7f67','#6a5d48','#d2c2a4'],150,.6)}else sfx.stoneHit()}
       }
     }
     if(dead)orbs.splice(i,1);
@@ -243,7 +329,7 @@ function newEnemy(x,y,k){return{k:k||'b',kx:0,ky:0,rot:0,x,y,z:0,st:0,t:.4+Math.
 function ehit(m,x,y,hs){
   for(const [cx,cy] of [[x-hs,y-hs],[x+hs,y-hs],[x-hs,y+hs],[x+hs,y+hs]]){
     const tx=Math.floor(cx/T),ty=Math.floor(cy/T);
-    if(tx<0||ty<0||tx>=W||ty>=H||m[ty][tx])return true;
+    if(tx<0||ty<0||tx>=W||ty>=H||solid(m[ty][tx]))return true;
   }return false;
 }
 function hurt(e){
@@ -490,12 +576,11 @@ function drawEnts(){
 function gameOver(){
   g.fillStyle='rgba(0,0,0,.65)';g.fillRect(0,0,cv.width,cv.height);g.textAlign='center';
   g.fillStyle='#e0304a';g.font='bold 28px "Courier New",monospace';g.fillText('VALKYRIAN FÖLL',cv.width/2,180);
-  g.fillStyle='#e8e0d0';g.font='14px "Courier New",monospace';g.fillText('Tryck R för att börja om',cv.width/2,210);g.textAlign='left';
+  g.fillStyle='#e8e0d0';g.font='14px "Courier New",monospace';g.fillText('Tryck R för att återvända till världskartan',cv.width/2,210);g.textAlign='left';
 }
 // ---------- startskärm och slutscen ----------
-const menuRow=e=>{const r=cv.getBoundingClientRect(),x=(e.clientX-r.left)*cv.width/r.width,y=(e.clientY-r.top)*cv.height/r.height,i=Math.floor((y-MENU_Y)/MENU_DY);return x>=MENU_X0&&x<=MENU_X1&&i>=0&&i<MENU.length?i:-1};
-addEventListener('pointerdown',e=>{if(started)return;audioInit();if(!menu){menu=true;return}const i=menuRow(e);if(i>=0){sel=i;beginGame(MENU[i])}});
-addEventListener('pointermove',e=>{if(!started&&menu){const i=menuRow(e);if(i>=0)sel=i}});
+addEventListener('pointerdown',e=>{if(started){if(qmenu){const i=qRow(e);if(i>=0){qsel=i;qChoose()}}return}audioInit();toWorld()});
+addEventListener('pointermove',e=>{if(qmenu){const i=qRow(e);if(i>=0)qsel=i}}); // klick/tryck på startskärmen leder till världskartan
 const stars=(()=>{const r=mulberry32(77);return Array.from({length:70},()=>({x:r()*512,y:r()*280,s:r()<.2?2:1,p:r()*6.28,f:1+r()*2.5}))})();
 function sky(t,warm){
   const gr=g.createLinearGradient(0,0,0,cv.height);
@@ -527,21 +612,7 @@ function drawTitle(t){
   g.fillStyle='rgba(232,224,208,'+(.25+.75*(Math.sin(t*3.5)+1)/2)+')';
   g.fillText('TRYCK VALFRI TANGENT FÖR ATT STARTA',cv.width/2,236);
   g.font='11px "Courier New",monospace';g.fillStyle='#7f8cb8';
-  g.fillText('Piltangenter/WASD = gå   Mellanslag/J = magi',cv.width/2,366);
-  g.textAlign='left';
-}
-function drawMenu(t){
-  sky(t,false);g.textAlign='center';
-  g.fillStyle='#ffd84a';g.font='italic bold 30px Georgia,"Times New Roman",serif';g.fillText('Startbana',cv.width/2,44);
-  ln('#c79a1e',1.2,170,54,342,54,'butt');poly('#ffd84a',[[256,50],[260,54],[256,58],[252,54]]);
-  MENU.forEach((v,i)=>{
-    const top=MENU_Y+i*MENU_DY,y=top+MENU_DY/2,on=i===sel;
-    if(on){g.fillStyle='rgba(232,240,255,.14)';g.fillRect(MENU_X0,top+1,MENU_X1-MENU_X0,MENU_DY-2);
-      poly('#f4f7ff',[[206,y-5],[206,y+5],[214,y]]);poly('#f4f7ff',[[306,y-5],[306,y+5],[298,y]])}
-    g.font=(on?'bold 18px':'15px')+' "Courier New",monospace';
-    g.fillStyle=on?'#f4f7ff':'#7f8cb8';
-    g.fillText(String(v),cv.width/2,y+(on?6:5));
-  });
+  g.fillText('Piltangenter/WASD = gå   Mellanslag/J = magi   Q = meny',cv.width/2,366);
   g.textAlign='left';
 }
 function victory(){
@@ -813,7 +884,7 @@ function drums(p,s,fill,t){
   else if(p==='rage'){if([0,3,6,8,11,14].includes(s))kick(t);if(s===4||s===12)snare(t,1);if(s===10)hat(t,.6,1);else hat(t,s%2?.22:.38,0)}
 }
 function playStep(i,t){
-  if((i&15)===0)mus.th=L.theme||0; // musikvarianten byts vid taktgräns när banans tema ändras
+  if((i&15)===0)mus.th=L.world?0:(L.theme||0); // musikvarianten byts vid taktgräns när banans tema ändras
   const b=SONGS[mus.th][i>>4],s=i&15,sc=b.sc,tr=sc.tr||0,ch=CH[b.ch],root=BASS[b.ch]+tr;
   for(const e of b.ev)if(e.s===s)mpulse(e.m+tr,t,e.d*SD*.96,.22,sc.duty||.25,true);                         // melodi
   const ai=ARP[sc.arp][s];if(ai>=0)mpulse(ch[ai]+(sc.ao||0)+tr,t,SD*(sc.arp==='pulse8'?1.8:.9),sc.av||.08,.125,false); // arpeggio
@@ -861,6 +932,7 @@ function update(dt){
     if(L.hasKey){sfx.unlock();const n=L.lv+1;if(n>=100){P.won=true;return}newLevel(hash(L.seed+1,n,7),n);P.x=W*T/2;P.y=H*T/2}
     else if(performance.now()>lockT){sfx.locked();lockT=performance.now()+900}
   }
+  if(L.world)for(const p of L.portals)if(p.rx===L.rx&&p.ry===L.ry&&Math.hypot(P.x-p.x,P.y-p.y)<14){lastPortal=p;beginGame(p.lv);return} // portal: in i banan
   if(msgT>0)msgT-=dt;
 }
 function say(t){msg=t;msgT=2}
@@ -877,7 +949,10 @@ const THEMES=[
    crumb:{top:'#a8a882',left:'#979871',right:'#767757',bottom:'#64654a',mid:'#8a8a66',cl:'#ccd0a8',cd:'#1c1f10',ol:'#1c2012'}},
   {border:'#5a2f3c',floor:'#2a1824',check:'#31202c',
    stone:{top:'#c9a0b0',left:'#a67888',right:'#6e4558',bottom:'#46283a',mid:'#8c5c70',glint:'#f2d8e0',ol:'#24101a'},
-   crumb:{top:'#b09182',left:'#a08070',right:'#80604f',bottom:'#6d4f40',mid:'#92725f',cl:'#d8b8a0',cd:'#25140d',ol:'#2a1810'}}
+   crumb:{top:'#b09182',left:'#a08070',right:'#80604f',bottom:'#6d4f40',mid:'#92725f',cl:'#d8b8a0',cd:'#25140d',ol:'#2a1810'}},
+  {border:'#2f5a2a',floor:'#2d6a2d',check:'#316f31', // 3 = världskartan (gräsgolv); stone används inte där, crumb = förstörbara block i lerbrunt
+   stone:{top:'#a8a8b4',left:'#8a8a98',right:'#5c5c6c',bottom:'#40404e',mid:'#767686',glint:'#dcdce8',ol:'#1a1a24'},
+   crumb:{top:'#b59a6a',left:'#a28858',right:'#826a40',bottom:'#6e5833',mid:'#947b4c',cl:'#dcc590',cd:'#251a0a',ol:'#2a1e0c'}}
 ];
 const th=()=>THEMES[L.theme||0];
 function pickTheme(seed,lv){
@@ -917,7 +992,8 @@ function crumbly(px,py,x,y,s){ // matt, sprucken sten i varma gråtoner; s = ska
 function block(x,y,t,h){
   const px=x*T,py=y*T;
   if(t===1)stone(px,py);
-  else crumbly(px,py,x,y,h?h[1]-h[0]:0);
+  else if(t===2)crumbly(px,py,x,y,h?h[1]-h[0]:0);
+  else BLK[t].d(px,py,x,y);
 }
 function drawExit(cx,cy,on){ // utgång: rund metallplatta med fasad kant, infälld mitt och ett nyckelhål med innerskugga
   const [lt,md,dk]=on?['#fff0a0','#e8b830','#9a6a10']:['#9a9ab4','#62627c','#37374e'],P1=Math.PI;
@@ -939,6 +1015,20 @@ function drawExit(cx,cy,on){ // utgång: rund metallplatta med fasad kant, infä
   g.fillStyle=gr;g.fillRect(cx-6,cy-8,12,18);
   g.translate(2,2);kh();g.strokeStyle=on?'#7a5208':'#000';g.lineWidth=3;g.stroke(); // innerskugga uppe till vänster
   g.restore();
+}
+function drawPortals(){ // portal: liten stående dörr med rund överdel och banans nummer ovanför
+  const t=performance.now()/1000;
+  for(const p of L.portals){
+    if(p.rx!==L.rx||p.ry!==L.ry)continue;
+    const cx=p.x,by=p.y+14,w=10,h=26,arch=(a,b)=>{g.beginPath();g.moveTo(cx-a,by);g.lineTo(cx-a,by-b+a);g.arc(cx,by-b+a,a,Math.PI,0);g.lineTo(cx+a,by);g.closePath()};
+    g.fillStyle='rgba(140,170,255,'+(.10+.06*Math.sin(t*3+p.lv))+')';g.beginPath();g.ellipse(cx,by-h/2,w+9,h/2+8,0,0,7);g.fill(); // sken
+    ell('#0007',cx+1,by+1,w+2,3);
+    arch(w,h);g.fillStyle='#8c869c';g.fill();g.lineWidth=1.5;g.strokeStyle='#1a1428';g.stroke(); // karm
+    arch(7,23);const gr=g.createLinearGradient(0,by-23,0,by);gr.addColorStop(0,'#1a1040');gr.addColorStop(1,'#6a7cff');g.fillStyle=gr;g.fill(); // ljus öppning
+    g.fillStyle='rgba(255,255,255,'+(.3+.25*Math.sin(t*4+p.lv))+')';g.fillRect(cx-1,by-14+Math.sin(t*2+p.lv)*4,2,2);
+    const s='bana '+p.lv;g.font='bold 10px "Courier New",monospace';g.textAlign='center';g.lineJoin='round';g.lineWidth=3;
+    g.strokeStyle='#000';g.strokeText(s,cx,by-h-5);g.fillStyle='#ffd84a';g.fillText(s,cx,by-h-5);g.textAlign='left';
+  }
 }
 function drawKey(cx,cy){ // nyckel med skuggad, rundad guldyta
   const t=performance.now(),y=cy+Math.sin(t/250)*2,lt='#fff0a0',md='#e8b830',dk='#9a6a10',ol='#5a3a06';
@@ -962,6 +1052,7 @@ function draw(){
   const cx=W*T/2,cy=H*T/2;
   if(L.rx===L.exit[0]&&L.ry===L.exit[1])drawExit(cx,cy,L.hasKey);
   if(!L.hasKey&&L.rx===L.key[0]&&L.ry===L.key[1])drawKey(cx,cy);
+  if(L.world)drawPortals();
   drawEnts();drawFx();
   hud();if(P.dead)gameOver();if(P.won)victory();
 }
@@ -1078,7 +1169,7 @@ function drawPlayer(){
 function hud(){
   g.fillStyle='#000a';g.fillRect(0,0,cv.width,18);
   g.fillStyle='#e8e0d0';g.font='12px "Courier New",monospace';
-  g.fillText('Bana '+(L.lv||1)+'   Nyckel: '+(L.hasKey?'ja':'nej'),6,13);
+  g.fillText(L.world?'Världskartan':'Bana '+(L.lv||1)+'   Nyckel: '+(L.hasKey?'ja':'nej'),6,13);
   for(let i=0;i<P.max;i++)heart(190+i*13,9.5,5.2,P.hp>=2*i+2?1:P.hp>=2*i+1?.5:0);
   // minikarta
   for(const id of L.seen){const [a,b]=id.split(',').map(Number);
@@ -1089,7 +1180,7 @@ function hud(){
 // ---------- loop ----------
 newLevel((Math.random()*1e9)|0,START);
 let last=performance.now();
-(function frame(t){const dt=Math.min(0.05,(t-last)/1000);last=t;if(started){update(dt);draw()}else if(menu)drawMenu(t/1000);else drawTitle(t/1000);requestAnimationFrame(frame)})(last);
+(function frame(t){const dt=Math.min(0.05,(t-last)/1000);last=t;if(started){if(!qmenu)update(dt);draw();if(qmenu)drawQMenu()}else drawTitle(t/1000);requestAnimationFrame(frame)})(last);
 </script>
 </body>
 </html>
