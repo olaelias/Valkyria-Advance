@@ -1,0 +1,1186 @@
+<!DOCTYPE html>
+<html lang="sv">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Valkyria</title>
+<style>
+:root{--bg:#14101c;--fg:#e8e0d0;--dim:#8a7fa0;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+@media (prefers-color-scheme:dark){:root{--bg:#14101c;--fg:#e8e0d0;--dim:#8a7fa0}}
+html,body{height:100%;margin:0}
+body{background:var(--bg);color:var(--fg);font-family:"Courier New",monospace;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px}
+canvas{width:min(96vw,calc(88vh*512/384));image-rendering:pixelated;border:3px solid #3a2f52;background:#000}
+p{margin:0;color:var(--dim);font-size:13px;text-align:center;padding:0 12px}
+</style>
+</head>
+<body>
+<canvas id="c" width="512" height="384"></canvas>
+<p>Piltangenter eller WASD. Gå in i en portal på världskartan för att börja en bana. I banan: hitta nyckeln i sidorummet, gå sedan till utgången. Håll Mellanslag eller J för magi (salvor om tre). R = ny bana. Q = meny (tillbaka till världskartan). M = ljud av/på, N = musik av/på.</p>
+<script>
+const T=32,W=16,H=12,cv=document.getElementById('c'),g=cv.getContext('2d');
+
+// ===== TESTPARAMETER =====
+// START_LEVEL: reservvärde för bannivå. Banorna väljs numera via portalerna på världskartan (se PORTAL_LV). Ska vara 1.
+const START_LEVEL=1;
+let START=Math.min(99,Math.max(1,START_LEVEL|0));
+let started=false; // false = visa startskärmen tills spelet startas (första tangenten leder till världskartan)
+// ---------- världskartan: en bana som alla andra men utan fiender, med portaler till banorna ----------
+const PORTAL_LV=[1,10,20,30,40,50,60,70,80,90]; // banor som portalerna på världskartan leder till (en portal per bana, slumpade rum)
+let WORLD=null,lastPortal=null; // lastPortal: portalen spelaren senast gick in genom (dit man återvänder via Q-menyn) // världskartan skapas första gången den behövs och finns sedan kvar hela sessionen
+function toWorld(at){ // startar/återvänder till världskartan: utan 'at' i startrummet (första tangenten, game over), med 'at' (en portal) vid grottans öppning
+  if(!WORLD)buildWorld();
+  L=WORLD;L.rx=at?at.rx:0;L.ry=at?at.ry:0;started=true;qmenu=false;
+  P.dead=false;P.won=false;P.max=6;P.hp=12;P.moving=false;P.kx=P.ky=0;P.inv=0;P.x=at?at.x:W*T/2;P.y=at?at.y+T:H*T/2;if(at)P.dir=2;clr(); // en ruta nedanför portalen, vänd nedåt
+}
+// ---------- Q: paus/avbryt-meny i banorna (samma stil som den gamla startmenyn) ----------
+const QROWS=['Fortsätt i grottan','Återgå till världskartan'];
+const QY=160,QDY=28,QX0=130,QX1=382; // radernas läge på canvas
+let qmenu=false,qsel=0; // qmenu: menyn är öppen och spelet står stilla
+function qChoose(){if(qsel===1)toWorld(lastPortal);qmenu=false}
+function qKey(c){
+  if(c==='KeyQ'||c==='Escape')qmenu=false; // Q igen = fortsätt
+  else if(c==='ArrowUp'||c==='KeyW'||c==='ArrowDown'||c==='KeyS')qsel=(qsel+1)%QROWS.length;
+  else if(c==='Enter'||c==='Space'||c==='KeyJ'||c==='KeyZ'||c==='KeyX')qChoose(); // bara bekräftelsetangenter, så en gångtangent inte väljer av misstag
+}
+const qRow=e=>{const r=cv.getBoundingClientRect(),x=(e.clientX-r.left)*cv.width/r.width,y=(e.clientY-r.top)*cv.height/r.height,i=Math.floor((y-QY)/QDY);return x>=QX0&&x<=QX1&&i>=0&&i<QROWS.length?i:-1};
+function drawQMenu(){
+  g.fillStyle='rgba(0,0,0,.62)';g.fillRect(0,0,cv.width,cv.height);
+  g.fillStyle='rgba(20,16,40,.96)';g.fillRect(116,104,280,128);g.strokeStyle='#3a2f52';g.lineWidth=2;g.strokeRect(116,104,280,128);
+  g.textAlign='center';
+  g.fillStyle='#ffd84a';g.font='italic bold 24px Georgia,"Times New Roman",serif';g.fillText('Paus',cv.width/2,136);
+  ln('#c79a1e',1.2,170,146,342,146,'butt');poly('#ffd84a',[[256,142],[260,146],[256,150],[252,146]]);
+  QROWS.forEach((v,i)=>{
+    const top=QY+i*QDY,y=top+QDY/2,on=i===qsel;
+    if(on){g.fillStyle='rgba(232,240,255,.14)';g.fillRect(QX0,top+1,QX1-QX0,QDY-2);
+      poly('#f4f7ff',[[QX0+6,y-5],[QX0+6,y+5],[QX0+14,y]]);poly('#f4f7ff',[[QX1-6,y-5],[QX1-6,y+5],[QX1-14,y]])}
+    g.font=(on?'bold 15px':'14px')+' "Courier New",monospace';
+    g.fillStyle=on?'#f4f7ff':'#7f8cb8';
+    g.fillText(v,cv.width/2,y+5);
+  });
+  g.textAlign='left';
+}
+function beginGame(lv){
+  START=lv;started=true;qmenu=false;sfx.unlock();
+  P.dead=false;P.won=false;P.max=6;P.hp=12;P.inv=0;P.moving=false;P.kx=P.ky=0;
+  newLevel((Math.random()*1e9)|0,START);P.x=W*T/2;P.y=H*T/2;
+}
+
+// ---------- slump ----------
+function mulberry32(a){return function(){a|=0;a=a+0x6D2B79F5|0;let t=Math.imul(a^a>>>15,1|a);t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296}}
+const hash=(s,x,y)=>(s^Math.imul(x+1000,374761393)^Math.imul(y+1000,668265263))>>>0;
+
+// ---------- bana: lista över rum + dörrar, resten räknas fram ----------
+const DIRS=[[0,-1],[1,0],[0,1],[-1,0]];
+let L; // aktuell bana
+function newLevel(seed,lv,world){clr();
+  const rnd=mulberry32(seed),rooms=new Map(),edges=new Set(),k=(x,y)=>x+','+y;
+  const ek=(a,b)=>a<b?a+'|'+b:b+'|'+a;
+  function walk(x,y,n){
+    const path=[[x,y]];
+    for(let i=0;i<n;i++){
+      const opts=DIRS.map(d=>[x+d[0],y+d[1]]).filter(p=>!rooms.has(k(...p))&&Math.abs(p[0])<6&&Math.abs(p[1])<6);
+      if(!opts.length)break;
+      const [nx,ny]=opts[Math.floor(rnd()*opts.length)];
+      rooms.set(k(nx,ny),1);edges.add(ek(k(x,y),k(nx,ny)));
+      x=nx;y=ny;path.push([x,y]);
+    }
+    return path;
+  }
+  rooms.set('0,0',1);
+  const main=walk(0,0,8);
+  const from=main[Math.min(3,main.length-2)||0];
+  const br=walk(from[0],from[1],3);
+  const keyRoom=br.length>1?br[br.length-1]:main[Math.max(1,main.length-3)];
+  L={seed,rooms,edges,ek,k,exit:main[main.length-1],key:keyRoom,hasKey:false,cache:new Map(),seen:new Set(['0,0']),rx:0,ry:0,lv:lv||START,world:!!world};
+  L.theme=world?3:pickTheme(seed,L.lv);cv.style.borderColor=THEMES[L.theme].border;
+  if(world){L.exit=L.key=[99,99];L.portals=[]} // världskartan har varken nyckel eller utgång, bara portaler
+}
+const open=(rx,ry,d)=>L.edges.has(L.ek(L.k(rx,ry),L.k(rx+DIRS[d][0],ry+DIRS[d][1])));
+
+// ---------- rum: 0 golv, 1 fast block, 2 förstörbart block, 3-6 världskartans block ----------
+// ===== BLOCKTYPER =====
+// s = blockerar spelaren, p = stoppar skott, d = ritfunktion (px,py,x,y). Typ 1 och 2 ritas av stone() och crumbly().
+// Världskartans typer är än så länge enkla färgade ytor: byt ut d för en typ mot riktig grafik senare, resten av koden påverkas inte.
+const BLK={
+  1:{s:1,p:1},2:{s:1,p:1},
+  3:{s:0,p:0,d:(px,py,x,y)=>{ // gräs: fungerar som golv
+    g.fillStyle=(x+y)%2?'#3f8f3a':'#449541';g.fillRect(px,py,T,T)}},
+  4:{s:1,p:1,d:(px,py,x,y)=>{ // träd: grön krona, liten brun stam, oförstörbart
+    BLK[3].d(px,py,x,y);
+    g.fillStyle='#6b4423';g.fillRect(px+13,py+19,6,11);
+    g.fillStyle='#1d6b2c';g.beginPath();g.arc(px+16,py+13,12,0,7);g.fill()}},
+  5:{s:1,p:1,d:(px,py)=>{ // berg: grått, oförstörbart (som fasta block men annan färg)
+    g.fillStyle='#5c5c6a';g.fillRect(px,py,T,T);
+    g.fillStyle='#8a8a98';g.fillRect(px+2,py+2,T-4,T-4);
+    g.fillStyle='#a8a8b6';g.fillRect(px+4,py+4,T-14,T-14)}},
+  6:{s:1,p:0,d:(px,py)=>{ // vatten: går inte att gå på, men skott flyger över
+    g.fillStyle='#2b6fd1';g.fillRect(px,py,T,T);
+    g.fillStyle='#5b9cf0';g.fillRect(px+5,py+9,11,2);g.fillRect(px+16,py+21,11,2)}}
+};
+const solid=v=>!!v&&BLK[v].s===1;
+const LAND=[4,5,6]; // världskartans oförstörbara landtyper: träd, berg, vatten (används för ytterväggar och landbyper inne i rummen)
+// ===== SVÅRIGHETSÖKNING (fiender per rum) =====
+// Varje ENEMY_STEP:e bana höjs det maximala antalet fiender i slumpen med +1 (bana 1-10 = grundnivå). ENEMY_CAP är absolut tak.
+// ENEMY_BASE_BONUS: extra som läggs på redan från bana 1 (0 = som tidigare; 2 ger t.ex. max 5 i lila och 6 i grönt/rött).
+// ENCLOSE_AT: rum med så här många fiender eller fler får "inkapslade" fiender i celler av förstörbara block (labyrint).
+const ENEMY_STEP=10,ENEMY_CAP=10,ENEMY_BASE_BONUS=0,ENCLOSE_AT=7;
+const SHAPES=[[[0,0],[1,0],[2,0],[3,0]],[[0,0],[1,0],[0,1],[1,1]],[[0,0],[1,0],[2,0],[1,1]],[[0,0],[0,1],[0,2],[1,2]],[[1,0],[1,1],[1,2],[0,2]],[[1,0],[2,0],[0,1],[1,1]],[[0,0],[1,0],[1,1],[2,1]]];
+function room(rx,ry){
+  const id=L.k(rx,ry);if(L.cache.has(id))return L.cache.get(id);
+  const r=mulberry32(hash(L.seed,rx,ry)),m=Array.from({length:H},()=>Array(W).fill(0));
+  for(let x=0;x<W;x++){m[0][x]=1;m[H-1][x]=1}
+  for(let y=0;y<H;y++){m[y][0]=1;m[y][W-1]=1}
+  // dörrar är 2 block breda och exakt centrerade
+  if(open(rx,ry,0))m[0][7]=m[0][8]=0; if(open(rx,ry,2))m[H-1][7]=m[H-1][8]=0;
+  if(open(rx,ry,3))m[5][0]=m[6][0]=0; if(open(rx,ry,1))m[5][W-1]=m[6][W-1]=0;
+  // dörrarnas gångar får bara blockeras av förstörbara block, och rummets mitt är alltid fritt
+  const band=(x,y)=>x===7||x===8||y===5||y===6;
+  const mid=(x,y)=>x>=6&&x<=9&&y>=4&&y<=7;
+  m.hp={};
+  const want=8+Math.floor(r()*5);
+  for(let i=0,put=0;i<90&&put<want;i++){
+    let s=SHAPES[Math.floor(r()*SHAPES.length)].map(p=>p.slice());
+    for(let q=Math.floor(r()*4);q>0;q--)s=s.map(([x,y])=>[-y,x]);
+    const mx=Math.min(...s.map(p=>p[0])),my=Math.min(...s.map(p=>p[1]));
+    s=s.map(([x,y])=>[x-mx,y-my]);
+    const ox=1+Math.floor(r()*(W-2)),oy=1+Math.floor(r()*(H-2)),cells=s.map(([x,y])=>[x+ox,y+oy]);
+    let t=r()<0.4?2:1;
+    if(!cells.every(([x,y])=>x>=1&&x<=W-2&&y>=1&&y<=H-2&&!mid(x,y)&&m[y][x]===0))continue;
+    if(cells.some(([x,y])=>band(x,y)))t=2;
+    if(L.world&&t===1)t=LAND[Math.floor(r()*LAND.length)]; // världskartan: landbyper (träd/berg/vatten) ersätter de fasta blocken
+    cells.forEach(([x,y])=>{m[y][x]=t;if(t===2){const h=1+Math.floor(r()*3);m.hp[y*W+x]=[h,h]}});
+    put++;
+  }
+  
+  m.en=[];m.items=[];
+  if(L.world){ // världskartan: ytterväggen blir sammanhängande sträckor av berg, träd eller vatten (dörrgluggarna lämnas), allt golv blir gräs
+    const sides=[[],[],[],[]];
+    for(let x=0;x<W;x++){sides[0].push([x,0]);sides[1].push([x,H-1])}
+    for(let y=0;y<H;y++){sides[2].push([0,y]);sides[3].push([W-1,y])}
+    for(const sd of sides)for(let i=0;i<sd.length;){
+      const ty=LAND[Math.floor(r()*LAND.length)],len=2+Math.floor(r()*4);
+      for(let j=i;j<Math.min(i+len,sd.length);j++){const [x,y]=sd[j];if(m[y][x]===1)m[y][x]=ty}
+      i+=len;
+    }
+    for(let y=0;y<H;y++)for(let x=0;x<W;x++)if(m[y][x]===0)m[y][x]=3;
+  }
+  if(!(rx===0&&ry===0)&&!L.world){ // inga fiender i startrummet (och inga alls på världskartan)
+    const tm=L.theme,bonus=ENEMY_BASE_BONUS+Math.floor(((L.lv||1)-1)/ENEMY_STEP);
+    const cnt=Math.min(ENEMY_CAP,Math.max(tm?1:0,Math.floor(r()*(3+bonus))+(r()<.25?1:0)+(tm?1:0))); // teman: fler fiender och minst en av temats typ; max växer med banan
+    const pu=tm===1?.7:tm===2?.15:.35; // chans att en extra fiende är sjöborre
+    const po=1/3; // tre fiendetyper: löken tar 1/3 av alla fria platser (temats första fiende är alltid reserverad)
+    const pick=()=>{const x=r();if(x<po)return'o';return(x-po)/(1-po)<pu?'u':'b'}; // resten fördelas som förut mellan sjöborre och gummiboll (pu)
+    if(cnt>=ENCLOSE_AT){ // svårt rum: varje fiende får en egen cell av förstörbara block; grannceller delar väggar så en labyrint bildas
+      const ox=Math.floor(r()*2),oy=Math.floor(r()*2),cand=[];
+      for(let py=1+oy;py<=H-2;py+=2)for(let px=1+ox;px<=W-2;px+=2){
+        if(m[py][px])continue;
+        let ok=true; // cellen och hela ringen runt den måste vara fria från rummets mitt och från öppna dörrar
+        for(let dy=-1;dy<=1&&ok;dy++)for(let dx=-1;dx<=1;dx++){
+          const cx=px+dx,cy=py+dy;
+          if(mid(cx,cy)||((cx===0||cy===0||cx===W-1||cy===H-1)&&!m[cy][cx])){ok=false;break}
+        }
+        if(ok)cand.push([px,py]);
+      }
+      for(let i=cand.length-1;i>0;i--){const j=Math.floor(r()*(i+1));[cand[i],cand[j]]=[cand[j],cand[i]]}
+      cand.slice(0,cnt).forEach(([px,py],i)=>{
+        for(let dy=-1;dy<=1;dy++)for(let dx=-1;dx<=1;dx++){
+          const cx=px+dx,cy=py+dy;
+          if((dx||dy)&&!m[cy][cx]){m[cy][cx]=2;const h=1+Math.floor(r()*3);m.hp[cy*W+cx]=[h,h]}
+        }
+        const kind=(i===0&&tm)?(tm===1?'u':'b'):pick();
+        m.en.push(newEnemy(px*T+T/2,py*T+T/2,kind));
+      });
+    }else
+    for(let i=0;i<cnt;i++)for(let k=0;k<30;k++){
+      const tx=1+Math.floor(r()*(W-2)),ty=1+Math.floor(r()*(H-2));
+      if(m[ty][tx]||mid(tx,ty))continue;
+      const kind=(i===0&&tm)?(tm===1?'u':'b'):pick();
+      m.en.push(newEnemy(tx*T+T/2,ty*T+T/2,kind));break;
+    }
+  }
+  L.cache.set(id,m);return m;
+}
+
+// ---------- världskartan: bygg + slumpa ut portaler ----------
+function buildWorld(){
+  newLevel((Math.random()*1e9)|0,1,true);
+  const r=mulberry32(L.seed^0x2545f491),rl=[...L.rooms.keys()].map(s=>s.split(',').map(Number));
+  for(let i=rl.length-1;i>0;i--){const j=Math.floor(r()*(i+1));[rl[i],rl[j]]=[rl[j],rl[i]]} // blanda rummen så portalerna sprids
+  const band=(x,y)=>x===7||x===8||y===5||y===6,mid=(x,y)=>x>=6&&x<=9&&y>=4&&y<=7;
+  const spot=(rx,ry)=>{ // fri gräsyta (3x3) utanför dörrgångarna och rummets mitt, minst 4 rutor från andra portaler i rummet
+    const m=room(rx,ry),here=L.portals.filter(p=>p.rx===rx&&p.ry===ry),cand=[];
+    for(let y=2;y<=H-3;y++)for(let x=2;x<=W-3;x++){
+      if(band(x,y)||mid(x,y))continue;
+      let ok=true;for(let dy=-1;dy<=1&&ok;dy++)for(let dx=-1;dx<=1;dx++)if(m[y+dy][x+dx]!==3){ok=false;break}
+      if(ok&&here.every(p=>Math.hypot(p.x-(x*T+T/2),p.y-(y*T+T/2))>=4*T))cand.push([x,y]);
+    }
+    return cand.length?cand[Math.floor(r()*cand.length)]:null;
+  };
+  PORTAL_LV.forEach((lv,i)=>{
+    for(let k=0;k<rl.length;k++){
+      const [rx,ry]=rl[(i+k)%rl.length],s=spot(rx,ry);
+      if(s){L.portals.push({rx,ry,x:s[0]*T+T/2,y:s[1]*T+T/2,lv});break}
+    }
+  });
+  WORLD=L;
+}
+
+// ---------- spelare ----------
+const P={x:W*T/2,y:H*T/2,dir:2,t:0,moving:false,hs:10,ax:0,ay:1,burst:0,bt:0,cd:0,hp:12,max:6,inv:0,kx:0,ky:0,dead:false,won:false};
+const keys={};let msg='',msgT=0;
+const pv={x:0,y:0}; // spelarens faktiska hastighet (px/s), används för att sikta eldklot
+addEventListener('keydown',e=>{if(!started){if(!e.repeat&&!e.metaKey&&!e.ctrlKey&&!e.altKey){audioInit();e.preventDefault();toWorld()}return}audioInit();
+  if(qmenu){e.preventDefault();if(!e.repeat)qKey(e.code);return}
+  if(e.code==='KeyQ'&&!e.repeat&&!L.world&&!P.dead&&!P.won){e.preventDefault();qmenu=true;qsel=0;return} // Q: meny i en bana
+  keys[e.code]=true;if(e.code.startsWith('Arrow')||e.code==='Space')e.preventDefault();if(e.code==='KeyR')restart()});
+addEventListener('keyup',e=>keys[e.code]=false);
+function restart(){if(P.dead){toWorld();return} // game over -> tillbaka till världskartan
+  if(P.won){started=false;return} // vinst -> startskärmen och sedan världskartan
+  if(L.world)return; // världskartan skapas bara en gång per session
+  P.inv=0;newLevel((Math.random()*1e9)|0,L.lv);P.x=W*T/2;P.y=H*T/2}
+const hit=(x,y)=>{
+  const m=room(L.rx,L.ry);
+  for(const [cx,cy] of [[x-P.hs,y-P.hs],[x+P.hs,y-P.hs],[x-P.hs,y+P.hs],[x+P.hs,y+P.hs]]){
+    const tx=Math.floor(cx/T),ty=Math.floor(cy/T);
+    if(tx<0||ty<0||tx>=W||ty>=H)continue;
+    if(solid(m[ty][tx]))return true;
+  }return false;
+};
+const SPEED=172;   // pixlar per sekund (tidigare 115)
+const CORNER=20;   // hur många pixlar spelaren hjälps runt ett hörn
+function tryMove(mx,my){
+  if(!mx&&!my)return;
+  if(!hit(P.x+mx,P.y+my)){P.x+=mx;P.y+=my;return}
+  // blockerad: leta närmaste sidoförskjutning som gör att vägen blir fri och glid dit
+  const ux=mx?0:1,uy=mx?1:0,spd=Math.abs(mx||my);
+  for(let off=1;off<=CORNER;off++)for(const s of [1,-1]){
+    if(!hit(P.x+mx+ux*s*off,P.y+my+uy*s*off)){
+      const n=Math.min(off,spd);P.x+=ux*s*n;P.y+=uy*s*n;return;
+    }
+  }
+}
+// ---------- magi: salvor om tre energiklot ----------
+const orbs=[],parts=[],eorbs=[]; // eorbs = fiendens eldklot
+let entry=0; // räknas upp varje gång spelaren kommer in i ett rum (eller ny bana)
+const clr=()=>{orbs.length=0;parts.length=0;eorbs.length=0;entry++;P.inv=Math.max(P.inv,.6)};
+const fireDown=()=>keys.Space||keys.KeyJ||keys.KeyZ||keys.KeyX;
+function spark(x,y,n,cols,sp,life){
+  for(let i=0;i<n;i++){const a=Math.random()*6.28,v=sp*(.4+Math.random()*.8);
+    parts.push({k:'p',x,y,vx:Math.cos(a)*v,vy:Math.sin(a)*v,l:life*(.6+Math.random()*.6),m:life,c:cols[i%cols.length],s:1.5+Math.random()*2})}
+}
+function shoot(){
+  const x=P.x+P.ax*12,y=P.y-6+P.ay*12;
+  orbs.push({x,y,vx:P.ax*320,vy:P.ay*320,tr:[]});
+  parts.push({k:'ring',x,y,l:.14,m:.14});sfx.shoot();
+}
+function combat(dt){
+  if(P.burst>0){P.bt-=dt;if(P.bt<=0){shoot();P.burst--;P.bt=.075}}
+  else{P.cd-=dt;if(fireDown()&&P.cd<=0){P.burst=3;P.bt=0;P.cd=.5}}
+  const m=room(L.rx,L.ry);
+  for(let i=orbs.length-1;i>=0;i--){
+    const o=orbs[i];o.tr.unshift([o.x,o.y]);if(o.tr.length>5)o.tr.pop();
+    let dead=false;const n=Math.ceil(Math.hypot(o.vx,o.vy)*dt/6);
+    for(let k=0;k<n&&!dead;k++){
+      o.x+=o.vx*dt/n;o.y+=o.vy*dt/n;
+      if(o.x<-8||o.y<-8||o.x>W*T+8||o.y>H*T+8){dead=true;break}
+      const en=m.en.find(q=>Math.hypot(o.x-q.x,o.y-q.y)<12);
+      if(en){dead=true;hitEnemy(en,m,o);sfx.shock();spark(o.x,o.y,8,['#fff','#bfe3ff','#8fc4ff'],140,.3);break}
+      const tx=Math.floor(o.x/T),ty=Math.floor(o.y/T);
+      if(tx<0||ty<0||tx>=W||ty>=H)continue;
+      const v=m[ty][tx];
+      if(v&&BLK[v].p){
+        dead=true;spark(o.x,o.y,8,['#fff','#bfe3ff','#8fc4ff'],140,.3);
+        if(v===1&&tx>0&&ty>0&&tx<W-1&&ty<H-1)sfx.ground();
+        if(v===2){const key=ty*W+tx,h=m.hp[key];
+          if(h&&--h[0]<=0){sfx.stoneBreak();m[ty][tx]=L.world?3:0;delete m.hp[key];spark(tx*T+T/2,ty*T+T/2,14,['#aa9b82','#8e7f67','#6a5d48','#d2c2a4'],150,.6)}else sfx.stoneHit()}
+      }
+    }
+    if(dead)orbs.splice(i,1);
+  }
+  for(let i=parts.length-1;i>=0;i--){const p=parts[i];p.l-=dt;if(p.l<=0){parts.splice(i,1);continue}if(p.k==='p'){p.x+=p.vx*dt;p.y+=p.vy*dt}}
+}
+function bolt(x,y,len,seg,col){ // hackig liten blixt
+  const a=Math.random()*6.28;g.strokeStyle=col;g.lineWidth=1;g.lineJoin='miter';g.beginPath();g.moveTo(x,y);
+  for(let i=1;i<=seg;i++){const d=len*i/seg,j=(Math.random()-.5)*5;g.lineTo(x+Math.cos(a)*d-Math.sin(a)*j,y+Math.sin(a)*d+Math.cos(a)*j)}
+  g.stroke();
+}
+function drawFx(){
+  for(const p of parts){const a=p.l/p.m;
+    if(p.k==='ring'){g.strokeStyle='rgba(220,240,255,'+a+')';g.lineWidth=1.5;g.beginPath();g.arc(p.x,p.y,3+(1-a)*10,0,7);g.stroke();bolt(p.x,p.y,4+10*(1-a),2,'#fff')}
+    else{g.globalAlpha=a;g.fillStyle=p.c;g.fillRect(p.x-p.s/2,p.y-p.s/2,p.s,p.s);g.globalAlpha=1}}
+  for(const o of orbs){
+    o.tr.forEach(([x,y],i)=>{g.fillStyle='rgba(190,225,255,'+(.35-i*.06)+')';g.beginPath();g.arc(x,y,4.5-i*.7,0,7);g.fill()});
+    g.fillStyle='rgba(150,200,255,.35)';g.beginPath();g.arc(o.x,o.y,8,0,7);g.fill();
+    for(let k=0;k<3;k++)bolt(o.x,o.y,7+Math.random()*5,3,'#e6f4ff');
+    g.fillStyle='#fff';g.beginPath();g.arc(o.x,o.y,3.6,0,7);g.fill();
+  }
+  for(const b of eorbs){ // lökens eldklot: pulserar mellan orangerött och gult, med flamsvans bakåt
+    const t=performance.now()/1000,k=.5+.5*Math.sin(t*18+b.ph),y=b.y+10-fbH(b),sp=Math.hypot(b.vx,b.vy)||1,bx=-b.vx/sp,by=-b.vy/sp,L=11+4*k;
+    ell('rgba(0,0,0,.35)',b.x,b.y+10,6,2.2);
+    poly('rgba(255,110,20,'+(.5+.2*k)+')',[[b.x-by*5,y+bx*5],[b.x+bx*L,y+by*L],[b.x+by*5,y-bx*5]]);
+    g.fillStyle='rgba(255,120,20,'+(.25+.15*k)+')';g.beginPath();g.arc(b.x,y,11+2*k,0,7);g.fill();
+    g.fillStyle='rgb(255,'+Math.round(90+120*k)+','+Math.round(10+40*k)+')';g.beginPath();g.arc(b.x,y,6.2+1.2*k,0,7);g.fill();
+    g.fillStyle='rgb(255,'+Math.round(220+30*k)+','+Math.round(120+80*k)+')';g.beginPath();g.arc(b.x,y,3.2+.8*k,0,7);g.fill();
+  }
+}
+// ---------- fiender, hjärtan och skada ----------
+const DMG=2,AG_ON=3.5*T,AG_OFF=5*T; // skada i halva hjärtan; aggro-avstånd in/ut
+function newEnemy(x,y,k){return{k:k||'b',kx:0,ky:0,rot:0,x,y,z:0,st:0,t:.4+Math.random()*1.2,D:.55,u:0,vx:0,vy:0,hp:3,ag:0,aw:0,ear:0,fl:0,lt:0,ph:Math.random()*6.28,hd:Math.random()*6.283,ht:2+Math.random()*4,wp:Math.random()*6.28,fw:0,cg:0,en:-1}}
+function ehit(m,x,y,hs){
+  for(const [cx,cy] of [[x-hs,y-hs],[x+hs,y-hs],[x-hs,y+hs],[x+hs,y+hs]]){
+    const tx=Math.floor(cx/T),ty=Math.floor(cy/T);
+    if(tx<0||ty<0||tx>=W||ty>=H||solid(m[ty][tx]))return true;
+  }return false;
+}
+function hurt(e){
+  sfx.hurt();P.hp=Math.max(0,P.hp-DMG);P.inv=1.2;
+  const dx=P.x-e.x,dy=P.y-e.y,d=Math.hypot(dx,dy)||1;P.kx=dx/d*260;P.ky=dy/d*260;
+  spark(P.x,P.y-8,10,['#fff','#ff6a6a','#ffb0b0'],120,.4);
+  if(P.hp<=0)P.dead=true;
+}
+function hitEnemy(e,m,o){
+  if(e.k==='u'){ // sjöborren är oförstörbar men knuffas iväg
+    const v=Math.hypot(o.vx,o.vy)||1;e.kx=o.vx/v*230;e.ky=o.vy/v*230;e.fl=.1;
+    spark(e.x,e.y-4,6,['#fff2a0','#f5c518','#fff'],110,.25);return;
+  }
+  e.hp--;e.fl=.12;
+  if(e.hp<=0){
+    e.dead=1;spark(e.x,e.y-6,16,['#ff6a2a','#ffb070','#b82a10','#fff'],150,.55);
+    if(Math.random()<.14)m.items.push({x:e.x,y:e.y,t:0});
+    m.en=m.en.filter(q=>!q.dead);
+  }
+}
+function ents(dt){
+  const m=room(L.rx,L.ry);
+  P.inv=Math.max(0,P.inv-dt);
+  if(P.kx||P.ky){tryMove(P.kx*dt,0);tryMove(0,P.ky*dt);const f=Math.exp(-9*dt);P.kx*=f;P.ky*=f;if(Math.hypot(P.kx,P.ky)<8)P.kx=P.ky=0}
+  for(const e of m.en){
+    const dx=P.x-e.x,dy=P.y-e.y,d=Math.hypot(dx,dy),u=e.k==='u',hr=u?9:8;
+    if(e.k==='o'){oni(e,m,dt);if(P.inv<=0&&!P.dead&&d<17)hurt(e);continue} // lök: egen rörelse och eldklot
+    if(e.kx||e.ky){ // knuffad av skott
+      const nx=e.x+e.kx*dt,ny=e.y+e.ky*dt;
+      if(!ehit(m,nx,e.y,9))e.x=nx;else e.kx=0;
+      if(!ehit(m,e.x,ny,9))e.y=ny;else e.ky=0;
+      const f=Math.exp(-6*dt);e.kx*=f;e.ky*=f;if(Math.hypot(e.kx,e.ky)<10)e.kx=e.ky=0;
+    }
+    if(!u){
+      if(!e.ag&&d<AG_ON)e.ag=1;else if(e.ag&&d>AG_OFF)e.ag=0;
+      e.aw+=(e.ag-e.aw)*Math.min(1,dt*9);
+      e.ear+=((e.ag?Math.max(-1,Math.min(1,dx/50)):0)-e.ear)*Math.min(1,dt*10);
+    }else e.rot+=dt*(e.st===1?2.2:0)+Math.hypot(e.kx,e.ky)*dt*.04;
+    e.fl=Math.max(0,e.fl-dt);
+    if(e.st===0){
+      e.lt=Math.max(0,e.lt-dt);e.t-=dt;
+      if(e.t<=0){
+        let a;
+        if(e.ag)a=Math.atan2(dy,dx);
+        else if(Math.random()<.25){e.t=.5+Math.random()*.8;continue}
+        else a=Math.random()*6.283;
+        const sp=u?30:(e.ag?92:64);e.D=u?.9:(e.ag?.42:.55);
+        e.vx=Math.cos(a)*sp;e.vy=Math.sin(a)*sp;e.st=1;e.u=0;
+      }
+    }else{
+      e.u+=dt/e.D;e.z=(u?9:(e.ag?12:15))*Math.sin(Math.PI*Math.min(1,e.u));
+      const nx=e.x+e.vx*dt,ny=e.y+e.vy*dt;
+      if(!ehit(m,nx,e.y,hr))e.x=nx;
+      if(!ehit(m,e.x,ny,hr))e.y=ny;
+      if(e.u>=1){e.st=0;e.z=0;e.lt=.12;e.t=u?1+Math.random()*1.4:(e.ag?.2+Math.random()*.2:.5+Math.random()*.9)}
+    }
+    if(P.inv<=0&&!P.dead&&d<(u?19:17)&&e.z<9)hurt(e);
+  }
+  for(const it of m.items){
+    it.t+=dt;
+    if(Math.hypot(P.x-it.x,P.y-it.y)<16){
+      it.got=1;sfx.heart();P.max=Math.min(12,P.max+1);P.hp=P.max*2;
+      spark(it.x,it.y-6,14,['#fff','#ff4a78','#ffd84a'],120,.5);
+    }
+  }
+  m.items=m.items.filter(i=>!i.got);
+  shots(dt,m);
+}
+// ---------- lök: svävar sakta, laddar och skjuter eldklot mot spelaren så fort den kommer in i rummet ----------
+const ONION_CHARGE=1.1,ONION_FIRST_MAX=.5,ONION_GAP_MIN=1,ONION_GAP_MAX=7; // uppladdning (s), max slumpfördröjning före första skottet (s), paus mellan skott min/max (s)
+const ONION_SPEED=22,ONION_AMP=5,ONION_FREQ=1.8,FB_SPEED=120; // lökens fart (px/s), sinusvågens amplitud (px) och frekvens (rad/s), eldklotets fart (spelaren går 172)
+const fbH=b=>14+(26+b.z0)*Math.exp(-b.a*7); // eldklotets höjd över golvet: börjar ovanför bladen och sjunker mot spelarens höjd
+function oni(e,m,dt){
+  e.fl=Math.max(0,e.fl-dt);
+  if(e.en!==entry){e.en=entry;e.cg=0;e.fw=Math.random()*ONION_FIRST_MAX} // spelaren har just kommit in i rummet: första skottet nästan direkt
+  // rörelse: sakta rakt fram med en mycket låg sinusvåg tvärs kursen, helt utan att reagera på spelaren
+  e.ht-=dt;e.wp+=dt*ONION_FREQ;
+  const ca=Math.cos(e.hd),sa=Math.sin(e.hd),lat=ONION_AMP*ONION_FREQ*Math.cos(e.wp);
+  const nx=e.x+(ca*ONION_SPEED-sa*lat)*dt,ny=e.y+(sa*ONION_SPEED+ca*lat)*dt;
+  let free=0;
+  if(!ehit(m,nx,e.y,9)){e.x=nx;free++}
+  if(!ehit(m,e.x,ny,9)){e.y=ny;free++}
+  if(free<2)e.hd+=Math.PI+(Math.random()-.5)*1.4;          // vägg: vänd och sväva åt andra hållet
+  else if(e.ht<=0){e.hd+=(Math.random()-.5)*1.8;e.ht=3+Math.random()*4} // då och då en lätt kursändring
+  e.z=7+Math.sin(e.wp*.9+e.ph)*1.5; // sväver strax över golvet
+  // eldklot: ladda (gult/orange sken) och avfyra, sedan slumpad paus
+  if(e.cg>0){
+    e.cg+=dt;
+    if(e.cg>=ONION_CHARGE){fireball(e);e.cg=0;e.fw=ONION_GAP_MIN+Math.random()*(ONION_GAP_MAX-ONION_GAP_MIN)}
+  }else{e.fw-=dt;if(e.fw<=0&&!P.dead)e.cg=.001}
+}
+function aim(sx,sy){ // siktpunkt: där spelaren hinner nås om den fortsätter i samma riktning (längst till rummets vägg), annars där den står
+  const vx=pv.x,vy=pv.y;
+  if(Math.hypot(vx,vy)<10)return[P.x,P.y];
+  const lo=T+P.hs,hx=W*T-T-P.hs,hy=H*T-T-P.hs;
+  let tw=6;
+  if(vx>0)tw=Math.min(tw,(hx-P.x)/vx);else if(vx<0)tw=Math.min(tw,(lo-P.x)/vx);
+  if(vy>0)tw=Math.min(tw,(hy-P.y)/vy);else if(vy<0)tw=Math.min(tw,(lo-P.y)/vy);
+  tw=Math.max(0,tw);let t=tw; // hinner klotet inte fram före väggen siktar det på väggpunkten där spelaren stannar
+  for(let q=.02;q<=tw;q+=.02)if(Math.hypot(P.x+vx*q-sx,P.y+vy*q-sy)<=FB_SPEED*q){t=q;break}
+  return[P.x+vx*t,P.y+vy*t];
+}
+function fireball(e){
+  const [tx,ty]=aim(e.x,e.y),dx=tx-e.x,dy=ty-e.y,d=Math.hypot(dx,dy)||1;
+  eorbs.push({x:e.x,y:e.y,vx:dx/d*FB_SPEED,vy:dy/d*FB_SPEED,a:0,z0:e.z,ph:Math.random()*6.28});
+  sfx.fire();
+}
+function shots(dt,m){
+  for(let i=eorbs.length-1;i>=0;i--){
+    const b=eorbs[i];b.a+=dt;b.x+=b.vx*dt;b.y+=b.vy*dt;
+    const tx=Math.floor(b.x/T),ty=Math.floor(b.y/T);
+    let dead=tx<0||ty<0||tx>=W||ty>=H||(!!m[ty][tx]&&(tx===0||ty===0||tx===W-1||ty===H-1)); // flyger över alla block; bara rummets yttervägg släcker klotet
+    if(!dead&&!P.dead&&P.inv<=0&&Math.hypot(P.x-b.x,P.y-b.y)<12){hurt(b);dead=true}
+    if(dead){spark(b.x,b.y+10-fbH(b),12,['#fff3a0','#ffb030','#ff6a1a'],120,.4);eorbs.splice(i,1)}
+    else spark(b.x,b.y+10-fbH(b),1,['#ffe070','#ff9a30','#ff5a1a'],20,.3);
+  }
+}
+function heart(x,y,s,fill,col){ // fill: 0 tomt, .5 halvt, 1 fullt
+  const p=()=>{g.beginPath();g.moveTo(x,y+s);g.bezierCurveTo(x-s*1.5,y-s*.1,x-s*.9,y-s*1.0,x,y-s*.35);g.bezierCurveTo(x+s*.9,y-s*1.0,x+s*1.5,y-s*.1,x,y+s)};
+  g.save();p();g.clip();
+  g.fillStyle='#2a1020';g.fillRect(x-s*2,y-s*2,s*4,s*4);
+  if(fill>0){g.fillStyle=col||'#e0304a';g.fillRect(x-s*2,y-s*2,fill>=1?s*4:s*2,s*4)}
+  g.restore();
+  p();g.strokeStyle='#12060c';g.lineWidth=1;g.stroke();
+  if(fill>0)ell('rgba(255,255,255,.7)',x-s*.55,y-s*.35,s*.22,s*.32,-.5);
+}
+function drawItem(it,t){
+  const y=it.y-8+Math.sin(t*4+it.t)*2.5;
+  ell('#0006',it.x,it.y+4,6,2);
+  g.fillStyle='rgba(255,216,74,'+(.22+.1*Math.sin(t*6))+')';g.beginPath();g.arc(it.x,y,12,0,7);g.fill();
+  heart(it.x,y,7,1,'#ff4a78');
+  if(Math.sin(t*5+it.t)>.7){ln('#fff',1,it.x+7,y-9,it.x+7,y-4,'butt');ln('#fff',1,it.x+4.5,y-6.5,it.x+9.5,y-6.5,'butt')}
+}
+function drawUrchin(e){
+  const N=14,cy=-2-e.z,R=9.5,h=1-e.z/36;
+  ell('#0007',e.x,e.y+12,10.5*h,3.4*h);
+  let sx=1,sy=1;
+  if(e.st===1){const k=Math.sin(Math.PI*Math.min(1,e.u));sx=1-.06*k;sy=1+.08*k}
+  else if(e.lt>0){const k=e.lt/.12;sx=1+.1*k;sy=1-.12*k}
+  g.save();g.translate(e.x,e.y+cy);g.scale(sx,sy);
+  for(let i=0;i<N;i++){ // taggar, skuggade efter hur mycket de vetter mot ljuset (uppe till vänster)
+    const a=e.rot+i*Math.PI*2/N,ca=Math.cos(a),sa=Math.sin(a),l=(-.7*ca-.7*sa+1)/2;
+    const col='rgb('+Math.round(122+133*l)+','+Math.round(76+154*l)+','+Math.round(0+110*l)+')';
+    const bx=ca*7.8,by=sa*7.8,px=-sa*2.4,py=ca*2.4;
+    poly(col,[[bx+px,by+py],[ca*15.6,sa*15.6],[bx-px,by-py]]);
+    g.strokeStyle='#4a2e00';g.lineWidth=.6;g.stroke();
+  }
+  const gr=g.createRadialGradient(-3.5,-4,1,0,0,R+1);
+  gr.addColorStop(0,'#fff6b0');gr.addColorStop(.45,'#f5c518');gr.addColorStop(.85,'#c98a00');gr.addColorStop(1,'#7a4c00');
+  g.fillStyle=gr;g.beginPath();g.arc(0,0,R,0,7);g.fill();g.strokeStyle='#4a2e00';g.lineWidth=.8;g.stroke();
+  for(let i=0;i<5;i++){ // korta taggar som pekar mot betraktaren
+    const a=e.rot*.6+i*2.4,r=i?5.4:0,bx=Math.cos(a)*r,by=Math.sin(a)*r*.8;
+    ell('#8a5a00',bx+.4,by+.5,2.1,2.1);ell('#f0b81a',bx,by,1.8,1.8);ell('#fff2a0',bx-.6,by-.7,.7,.7);
+  }
+  ell('rgba(255,255,255,.8)',-3.8,-5.6,2.5,1.6,-.6);
+  if(e.fl>0){g.fillStyle='rgba(255,255,255,.55)';g.beginPath();g.arc(0,0,15,0,7);g.fill()}
+  g.restore();
+}
+function drawOnion(e){ // fet, överväxt schalottenlök med vertikala ränder och en komisk frisyr av gröna blad
+  const t=performance.now()/1000,h=1-e.z/36,sw=Math.sin(t*2.2+e.ph);
+  ell('#0007',e.x,e.y+9.5,10.5*h,3.4*h);
+  g.save();g.translate(e.x,e.y+10-e.z);g.scale(1,1+Math.sin(t*2.4+e.ph)*.02); // origo vid lökens botten
+  for(const [an,L,bend] of [[-.9,8,-3],[.95,8.5,3.5],[-.42,12,-3],[.4,11,2],[0,14.5,4]]){ // blad: [vinkel, längd, böj]
+    g.save();g.translate(an*2.2,-17);g.rotate(an+sw*.05*L/10);
+    const bl=()=>{g.beginPath();g.moveTo(-1.7,0);g.quadraticCurveTo(-3.1,-L*.55,bend,-L);g.quadraticCurveTo(3.1,-L*.5,1.7,0);g.closePath()};
+    bl();g.fillStyle='#3f8a2a';g.fill();
+    g.save();bl();g.clip();g.fillStyle='#8fd05a';g.fillRect(-4,-L-2,3.1,L+3);g.restore(); // ljus vänstersida
+    g.strokeStyle='#245a1a';g.lineWidth=.7;bl();g.stroke();
+    ln('#c4ec8a',.7,-.3,-1.5,bend*.8,-L*.8,'butt');
+    g.restore();
+  }
+  const body=()=>{g.beginPath();g.moveTo(0,-19);
+    g.bezierCurveTo(2.5,-18.2,10.6,-14.5,10.8,-8);g.bezierCurveTo(10.8,-2.5,6,0,0,0);
+    g.bezierCurveTo(-6,0,-10.8,-2.5,-10.8,-8);g.bezierCurveTo(-10.6,-14.5,-2.5,-18.2,0,-19);g.closePath()};
+  const gr=g.createLinearGradient(0,-19,0,0); // grönvitt upptill, gulare nedtill
+  gr.addColorStop(0,'#bfe08a');gr.addColorStop(.3,'#eef5c8');gr.addColorStop(.62,'#f2ecb0');gr.addColorStop(.88,'#d9c660');gr.addColorStop(1,'#b09a30');
+  body();g.fillStyle=gr;g.fill();
+  g.save();body();g.clip();
+  for(let i=-3;i<=3;i++){ // vertikala ränder: meridianer som följer lökens runda form
+    const sn=Math.sin(i*.42);
+    for(const [dx,col,lw] of [[0,'rgba(120,150,60,.65)',.9],[.9,'rgba(255,255,230,.5)',.6]]){
+      g.strokeStyle=col;g.lineWidth=lw;g.beginPath();
+      for(let q=0;q<=20;q++){const u=q/20,x=sn*11*Math.pow(Math.sin(Math.PI*u),.7)+dx,y=-19*u;q?g.lineTo(x,y):g.moveTo(x,y)}
+      g.stroke();
+    }
+  }
+  const sh=g.createRadialGradient(-4,-13,2,0,-9,14); // fake 3D: ljus uppe till vänster, skugga nere till höger
+  sh.addColorStop(0,'rgba(255,255,255,.55)');sh.addColorStop(.35,'rgba(255,255,255,0)');sh.addColorStop(.72,'rgba(50,50,0,0)');sh.addColorStop(1,'rgba(50,50,0,.5)');
+  g.fillStyle=sh;g.fillRect(-12,-20,24,21);
+  g.restore();
+  g.strokeStyle='#58621c';g.lineWidth=.9;body();g.stroke();
+  ell('rgba(255,255,255,.8)',-4.5,-13.5,2.4,1.5,-.5);
+  for(const x of [-2.6,-1.2,0,1.3,2.7])ln('#cfc59a',.8,x*.8,-.4,x*1.3+Math.sin(t*3+x)*.8,2.6); // rothår
+  if(e.fl>0){body();g.fillStyle='rgba(255,255,255,.75)';g.fill()}
+  g.restore();
+  if(e.cg>0){ // förvarning: gult sken som mjukt skiftar mot orange ovanför bladen
+    const k=Math.min(1,e.cg/ONION_CHARGE),p=.5+.5*Math.sin(t*10.7),gx=e.x,gy=e.y+10-e.z-40,R=4+5*k+2*p;
+    const c='255,'+Math.round(226-100*p)+','+Math.round(70-45*p);
+    const gl=g.createRadialGradient(gx,gy,0,gx,gy,R*1.8);
+    gl.addColorStop(0,'rgba('+c+',.95)');gl.addColorStop(.45,'rgba('+c+',.5)');gl.addColorStop(1,'rgba('+c+',0)');
+    g.fillStyle=gl;g.beginPath();g.arc(gx,gy,R*1.8,0,7);g.fill();
+    g.fillStyle='rgba(255,250,200,'+(.5+.4*k)+')';g.beginPath();g.arc(gx,gy,R*.45,0,7);g.fill();
+  }
+}
+function drawEnemy(e){
+  if(e.k==='u'){drawUrchin(e);return}
+  if(e.k==='o'){drawOnion(e);return}
+  const t=performance.now()/1000,h=1-e.z/36;
+  ell('#0007',e.x,e.y+9.5,8.5*h,3.2*h);
+  let sx=1,sy=1;
+  if(e.st===1){const k=Math.sin(Math.PI*Math.min(1,e.u));sx=1-.1*k;sy=1+.14*k}
+  else if(e.lt>0){const k=e.lt/.12;sx=1+.16*k;sy=1-.2*k}
+  else if(e.t<.18){const k=1-e.t/.18;sx=1+.14*k;sy=1-.18*k}
+  else sy=1+Math.sin(t*3+e.ph)*.02;
+  g.save();g.translate(e.x,e.y+10-e.z);g.scale(sx,sy); // origo vid bollens botten
+  const aw=e.aw,len=8.2+aw*1.8;
+  for(const sd of [-1,1]){ // llamaöron: slappa utåt, spetsade och lutade mot spelaren vid aggro
+    g.save();g.translate(sd*4.3,-18.4);g.rotate(sd*(.5-.38*aw)+e.ear*.55);
+    poly('#c93610',[[-2.5,0],[-2.3,-len*.6],[.4,-len],[2.3,-len*.55],[2.5,0]]);
+    poly('#ffb48a',[[-1.1,-1],[-.9,-len*.55],[.2,-len*.82],[1.1,-len*.5],[1.2,-1]]);
+    g.restore();
+  }
+  const gr=g.createRadialGradient(-3.5,-14.5,1,0,-10,12.5);
+  gr.addColorStop(0,'#ffe2bc');gr.addColorStop(.28,'#ff8a3a');gr.addColorStop(.7,'#e8481a');gr.addColorStop(1,'#9c1e08');
+  g.fillStyle=gr;g.beginPath();g.ellipse(0,-10,9,10.2,0,0,7);g.fill();
+  g.strokeStyle='#5a1204';g.lineWidth=.9;g.stroke();
+  g.strokeStyle='rgba(255,160,100,.55)';g.lineWidth=1.2;g.beginPath();g.ellipse(0,-10,7.8,9,0,.2*Math.PI,.62*Math.PI);g.stroke(); // reflekterat ljus nedtill
+  ell('rgba(255,255,255,.88)',-3.7,-15.6,2.3,3.4,-.5);ell('rgba(255,255,255,.7)',-1,-19,.9,.9); // glans
+  const px=Math.max(-1,Math.min(1,(P.x-e.x)/60))*.9,py=Math.max(-1,Math.min(1,(P.y-e.y)/60))*.9;
+  for(const sd of [-1,1]){
+    ell('#fff',sd*3.2,-11,2.2,2.8);ell('#201010',sd*3.2+px,-11+py,1.1,1.6);
+    if(aw>.5)ln('#5a1204',1.3,sd*5.7,-14.4,sd*1.6,-13,'butt');
+  }
+  if(aw>.5)ell('#4a0c04',0,-5.8,2,1.4);else ln('#5a1204',.9,-1.5,-6.2,1.5,-6.2,'butt');
+  if(e.fl>0){g.fillStyle='rgba(255,255,255,.75)';g.beginPath();g.ellipse(0,-10,9,10.2,0,0,7);g.fill()}
+  g.restore();
+}
+function drawEnts(){
+  const m=room(L.rx,L.ry),t=performance.now()/1000;
+  for(const it of m.items)drawItem(it,t);
+  const list=[{y:P.y,f:()=>{if(P.inv>0&&Math.floor(P.inv*14)%2)g.globalAlpha=.35;drawPlayer();g.globalAlpha=1}},...m.en.map(e=>({y:e.y,f:()=>drawEnemy(e)}))];
+  list.sort((a,b)=>a.y-b.y);list.forEach(o=>o.f());
+}
+function gameOver(){
+  g.fillStyle='rgba(0,0,0,.65)';g.fillRect(0,0,cv.width,cv.height);g.textAlign='center';
+  g.fillStyle='#e0304a';g.font='bold 28px "Courier New",monospace';g.fillText('VALKYRIAN FÖLL',cv.width/2,180);
+  g.fillStyle='#e8e0d0';g.font='14px "Courier New",monospace';g.fillText('Tryck R för att återvända till världskartan',cv.width/2,210);g.textAlign='left';
+}
+// ---------- startskärm och slutscen ----------
+addEventListener('pointerdown',e=>{if(started){if(qmenu){const i=qRow(e);if(i>=0){qsel=i;qChoose()}}return}audioInit();toWorld()});
+addEventListener('pointermove',e=>{if(qmenu){const i=qRow(e);if(i>=0)qsel=i}}); // klick/tryck på startskärmen leder till världskartan
+const stars=(()=>{const r=mulberry32(77);return Array.from({length:70},()=>({x:r()*512,y:r()*280,s:r()<.2?2:1,p:r()*6.28,f:1+r()*2.5}))})();
+function sky(t,warm){
+  const gr=g.createLinearGradient(0,0,0,cv.height);
+  gr.addColorStop(0,'#050818');gr.addColorStop(.6,'#142450');gr.addColorStop(1,warm?'#6a4a50':'#26386e');
+  g.fillStyle=gr;g.fillRect(0,0,cv.width,cv.height);
+  for(const s of stars){g.fillStyle='rgba(230,240,255,'+(.25+.75*Math.max(0,Math.sin(t*s.f+s.p)))+')';g.fillRect(s.x,s.y,s.s,s.s)}
+}
+function showFigure(x,y,sc,dir,walk,t){ // ritar valkyrian fristående (fötterna vid x,y)
+  const ph=t*13,s=walk?Math.sin(ph):0,c=walk?Math.cos(ph):0,idle=Math.sin(t*2.2),keep=P.moving;
+  P.moving=walk;
+  const bob=walk?-Math.abs(c)*1.5:idle*.35,sw=walk?c*1.3:idle*.5;
+  ell('#0008',x,y,10*sc,3.4*sc);
+  g.save();g.translate(x,y);g.scale(dir===3?-sc:sc,sc);
+  if(dir===1||dir===3)side(s,c,bob,idle,sw);else facing(dir===0,s,c,bob,idle,sw);
+  g.restore();P.moving=keep;
+}
+function drawTitle(t){
+  sky(t,false);
+  poly('#0a1030',[[0,300],[60,268],[110,296],[190,248],[260,290],[330,260],[400,296],[460,266],[512,292],[512,384],[0,384]]);
+  g.fillStyle='#060a1c';g.fillRect(0,332,cv.width,52);ln('#1c2c60',1,0,332.5,cv.width,332.5,'butt');
+  showFigure(((t*55)%(cv.width+140))-70,332,1.6,1,true,t); // valkyrian vandrar i sidled
+  g.textAlign='center';
+  g.font='italic bold 70px Georgia,"Times New Roman",serif';
+  g.lineJoin='round';g.lineWidth=4;g.strokeStyle='rgba(255,205,160,.5)';g.strokeText('Valkyria',cv.width/2,150);
+  g.fillStyle='#7a0c18';g.fillText('Valkyria',cv.width/2,150);
+  g.fillStyle='rgba(255,120,110,.25)';g.fillText('Valkyria',cv.width/2-1,148); // svag reflex ovanpå
+  ln('#c79a1e',1.2,150,172,362,172,'butt');poly('#ffd84a',[[256,167],[261,172],[256,177],[251,172]]);
+  g.font='15px "Courier New",monospace';
+  g.fillStyle='rgba(232,224,208,'+(.25+.75*(Math.sin(t*3.5)+1)/2)+')';
+  g.fillText('TRYCK VALFRI TANGENT FÖR ATT STARTA',cv.width/2,236);
+  g.font='11px "Courier New",monospace';g.fillStyle='#7f8cb8';
+  g.fillText('Piltangenter/WASD = gå   Mellanslag/J = magi   Q = meny',cv.width/2,366);
+  g.textAlign='left';
+}
+function victory(){
+  const t=performance.now()/1000;
+  sky(t,true);
+  const gl=g.createRadialGradient(256,260,10,256,260,170);gl.addColorStop(0,'rgba(255,220,140,.4)');gl.addColorStop(1,'rgba(255,220,140,0)');
+  g.fillStyle=gl;g.fillRect(0,80,cv.width,300);
+  g.textAlign='center';
+  g.fillStyle='#ffd84a';g.font='italic bold 30px Georgia,"Times New Roman",serif';
+  g.fillText('Du har besegrat',cv.width/2,70);g.fillText('labyrinten i Hel',cv.width/2,106);
+  g.fillStyle='#e8e0d0';g.font='italic 18px Georgia,"Times New Roman",serif';
+  g.fillText('och återvänder till Valhall',cv.width/2,140);
+  showFigure(256,310,2.2,2,false,t);
+  g.font='13px "Courier New",monospace';g.fillStyle='rgba(232,224,208,'+(.35+.65*(Math.sin(t*3.5)+1)/2)+')';
+  g.fillText('Tryck R för att börja om',cv.width/2,358);
+  g.textAlign='left';
+}
+// ---------- ljud: allt syntetiseras med Web Audio (inga ljudfiler) ----------
+const AC=window.AudioContext||window.webkitAudioContext;
+let ac=null,master=null,nbuf=null,lockT=0;
+function audioInit(){
+  if(!ac&&AC){
+    ac=new AC();master=ac.createGain();master.gain.value=.6;
+    const comp=ac.createDynamicsCompressor();master.connect(comp);comp.connect(ac.destination);
+    nbuf=ac.createBuffer(1,ac.sampleRate,ac.sampleRate);const d=nbuf.getChannelData(0);
+    for(let i=0;i<d.length;i++)d[i]=Math.random()*2-1;
+  }
+  if(ac&&ac.state==='suspended')ac.resume();
+  if(ac)musicStart();
+}
+addEventListener('keydown',e=>{if(e.code==='KeyM'&&master&&!e.repeat)master.gain.value=master.gain.value?0:.6});
+const rr=(a,b)=>a+Math.random()*(b-a);
+function env(gn,t,vol,a,d){gn.gain.cancelScheduledValues(t);gn.gain.setValueAtTime(.0001,t);gn.gain.exponentialRampToValueAtTime(vol,t+a);gn.gain.exponentialRampToValueAtTime(.0001,t+a+d)}
+function tone(type,f0,f1,dur,vol,at=0,lp=0,a=.004){ // svepande ton
+  if(!ac)return;const t=ac.currentTime+at,o=ac.createOscillator(),gn=ac.createGain();
+  o.type=type;o.frequency.setValueAtTime(f0,t);if(f1!==f0)o.frequency.exponentialRampToValueAtTime(f1,t+dur);
+  let n=o;if(lp){const f=ac.createBiquadFilter();f.type='lowpass';f.frequency.value=lp;o.connect(f);n=f}
+  n.connect(gn);gn.connect(master);env(gn,t,vol,a,dur);o.start(t);o.stop(t+dur+a+.05);
+}
+function noise(type,f0,f1,dur,vol,at=0,q=1,a=.004){ // filtrerat brus
+  if(!ac)return;const t=ac.currentTime+at,s=ac.createBufferSource(),f=ac.createBiquadFilter(),gn=ac.createGain();
+  s.buffer=nbuf;f.type=type;f.Q.value=q;f.frequency.setValueAtTime(f0,t);if(f1!==f0)f.frequency.exponentialRampToValueAtTime(f1,t+dur);
+  s.connect(f);f.connect(gn);gn.connect(master);env(gn,t,vol,a,dur);s.start(t,Math.random()*Math.max(0,.9-dur),dur+a+.05);
+}
+function flutter(type,f0,f1,dur,vol,rate,at=0){ // ton med snabb amplitudmodulering = fladdrande elektricitet
+  if(!ac)return;const t=ac.currentTime+at,o=ac.createOscillator(),am=ac.createGain(),lfo=ac.createOscillator(),lg=ac.createGain(),gn=ac.createGain();
+  o.type=type;o.frequency.setValueAtTime(f0,t);o.frequency.exponentialRampToValueAtTime(f1,t+dur);
+  am.gain.value=.5;lfo.type='square';lfo.frequency.value=rate;lg.gain.value=.5;lfo.connect(lg);lg.connect(am.gain);
+  o.connect(am);am.connect(gn);gn.connect(master);env(gn,t,vol,.005,dur);
+  o.start(t);lfo.start(t);o.stop(t+dur+.05);lfo.stop(t+dur+.05);
+}
+const sfx={
+  key(){ // nyckelskrammel: många korta, oharmoniska metallpling
+    for(let i=0;i<8;i++){const f=rr(2300,5200),at=i*.04+rr(0,.02);
+      tone('triangle',f,f*.96,.12,.07,at);noise('highpass',6500,6500,.025,.05,at,1)}
+    tone('square',900,700,.05,.04,.02,2500);
+  },
+  locked(){ // dovt, nekande "klack-klack" som sjunker
+    tone('square',190,115,.09,.12,0,550);noise('lowpass',450,300,.06,.14,0,.8);
+    tone('square',125,70,.11,.1,.1,420);noise('lowpass',350,200,.07,.1,.1,.8);
+  },
+  unlock(){ // skarpt, ekande "ka-lack": börjar högt och landar dovt
+    tone('triangle',2700,1900,.07,.12);noise('highpass',3500,3500,.03,.1);
+    tone('triangle',1700,520,.22,.13,.09);noise('bandpass',3000,900,.08,.07,.09,1.2);
+    tone('sine',320,85,.3,.17,.1,0,.01);tone('sine',150,55,.22,.12,.1,300,.01);
+    for(let i=1;i<=3;i++)tone('triangle',1500/i,700/i,.14,.05/i,.1+i*.13); // eko
+  },
+  shoot(){ // magiskt skott: fladder, elektrisk knastring och en ihålig luftbang
+    const v=rr(.92,1.08);
+    flutter('sawtooth',520*v,180*v,.18,.06,rr(40,56));flutter('square',1400*v,500*v,.14,.035,rr(60,80));
+    noise('bandpass',3500,1800,.16,.05,0,2);
+    tone('sine',170*v,55,.22,.15,0,300,.006);noise('lowpass',700,200,.25,.1,0,.7,.02);
+  },
+  shock(){ // träff på fiende: hård chock
+    noise('bandpass',4500,900,.14,.14,0,1.5,.001);flutter('sawtooth',1200,150,.16,.09,90);
+    tone('sine',130,45,.18,.2,0,250);tone('square',2000,400,.07,.05);
+  },
+  stoneHit(){ // dov, mörk rullande sten
+    noise('lowpass',320,110,.32,.2,0,.8,.01);tone('sawtooth',72,45,.3,.1,0,180);
+    for(let i=0;i<3;i++)tone('sine',rr(80,100),55,.1,.12,i*.075);
+  },
+  stoneBreak(){ // krossas: tyngre rullande ljud och sedan flygande grus
+    sfx.stoneHit();tone('sine',85,34,.36,.24,.02,200);noise('highpass',2500,2500,.05,.14,.1,1);
+    for(let i=0;i<18;i++)noise('bandpass',rr(1400,4800),rr(1400,4800),rr(.015,.04),rr(.05,.11),.12+Math.random()*.55,3);
+  },
+  ground(){ // oförstörbar sten: elektriciteten leds ned i marken och neutraliseras
+    flutter('sawtooth',520,70,.3,.09,35);tone('sine',90,40,.28,.18,.02,250);noise('lowpass',1800,150,.3,.07,0,.7);
+  },
+  heart(){ // hjärta: stigande, varm klang
+    [523,659,784,1047].forEach((f,i)=>{tone('triangle',f,f,.2,.1,i*.07);tone('sine',f*2,f*2,.14,.03,i*.07)});
+    tone('sine',262,262,.4,.07);noise('highpass',8000,8000,.06,.04,.26,1);
+  },
+  hurt(){ // träffad: sjunkande smäll med buzz
+    tone('sawtooth',320,70,.35,.15,0,900);noise('lowpass',1400,200,.18,.2,0,.8);
+    tone('sine',110,40,.25,.22,0,200);flutter('square',500,150,.2,.05,30);
+  },
+  fire(){ // lökens eldklot: mjuk, fräsande "fwoomp" som stiger
+    noise('bandpass',500,2200,.28,.1,0,1.2,.02);tone('sawtooth',140,360,.22,.07,0,700,.02);tone('sine',90,60,.2,.1,0,200,.01);
+  }
+};
+// ---------- musik: "Valkyrians himmelsvalv" (handskriven, 140 bpm, a-moll, 58 takter ≈ 1 min 40 s) ----------
+// Kanaler som i en NES: pulsvåg 1 = melodi, pulsvåg 2 = arpeggio, triangel = bas, brus = trummor.
+const MUS_VOL=.2;                 // musikens ljudstyrka (justera här); M = allt ljud av/på, N = bara musiken
+const SD=60/140/4;                // längden på ett sextondelssteg
+// Melodin skrivs i fraser om två takter (32 steg): NOT+OKTAV:LÄNGD i sextondelar, r = paus, | = taktstreck
+const PHR={
+  I1:'r:8 E6:2 D6:2 C6:2 D6:2 | E6:4 C6:2 A5:2 C6:8',
+  I2:'G6:4 E6:4 C6:4 E6:4 | D6:4 B5:4 G5:8',
+  V1:'E5:3 D5:1 C5:2 D5:2 E5:4 A4:2 C5:2 | C5:3 A4:1 C5:2 F5:4 E5:2 C5:2 r:2',
+  V2:'G5:3 E5:1 G5:2 A5:2 G5:4 E5:2 C5:2 | D5:3 B4:1 D5:2 G5:6 r:2 D5:2',
+  V3:'E5:2 A5:2 G5:2 E5:2 D5:4 C5:2 D5:2 | C5:2 F5:2 E5:2 C5:2 A4:4 C5:4',
+  V4:'B4:2 D5:2 G5:4 F5:2 D5:2 B4:4 | G#4:2 B4:2 E5:4 D5:2 B4:2 E5:4',
+  P1:'C5:2 F5:2 A5:4 C6:4 A5:2 F5:2 | D5:2 G5:2 B5:4 D6:4 B5:2 G5:2',
+  P2:'E5:2 A5:2 C6:4 E6:4 C6:2 A5:2 | G#5:2 B5:2 E6:4 r:2 E6:2 E6:2 E6:2',
+  C1:'A5:4 G5:2 F5:2 A5:4 C6:4 | B5:4 A5:2 G5:2 B5:6 r:2',
+  C2:'G5:4 E5:2 G5:2 B5:4 G5:4 | A5:4 E5:2 C6:2 A5:8',
+  C3:'A5:2 C6:2 A5:2 F5:2 A5:4 G5:4 | B5:2 D6:2 B5:2 G5:2 B5:4 D6:4',
+  C4:'E6:6 D6:2 C6:4 G5:4 | B5:4 G#5:4 E5:4 B4:4',
+  B1:'A5:8 F5:4 D5:4 | E5:8 G5:4 C6:4',
+  B2:'A5:6 C6:2 A5:8 | B5:8 G#5:4 B5:4',
+  O1:'B5:4 G#5:4 E5:4 B4:4 | E5:8 r:8',
+  // röda banan (argare): staccato, Bb-ackord, lång refräng som växlar mot snabba löpningar
+  RI1:'r:8 A5:2 A5:2 E5:2 A5:2 | A#5:4 A5:4 E5:4 r:4',
+  RI2:'A5:2 C6:2 E6:4 C6:2 A5:2 E5:4 | G#5:4 B5:4 E6:8',
+  RV1:'A5:1 r:1 A5:1 r:1 E5:2 A5:2 C6:2 B5:2 A5:2 E5:2 | A#5:1 r:1 A#5:1 r:1 D6:2 A#5:2 A5:2 F5:2 A5:4',
+  RV2:'D5:2 F5:2 A5:2 D6:2 C6:2 A5:2 F5:2 D5:2 | E5:2 G#5:2 B5:2 E6:2 D6:2 B5:2 G#5:2 E5:2',
+  RV3:'E6:2 E6:2 D6:2 C6:2 B5:2 C6:2 A5:4 | A#5:2 A#5:2 G5:2 F5:2 D5:2 F5:2 A#4:4',
+  RV4:'C6:3 A5:1 C6:2 F6:4 E6:2 C6:2 A5:2 | B5:2 G#5:2 E5:2 G#5:2 B5:4 E6:4',
+  RP1:'D5:1 F5:1 A5:1 D6:1 D5:1 F5:1 A5:1 D6:1 F6:8 | E5:1 G#5:1 B5:1 E6:1 E5:1 G#5:1 B5:1 E6:1 G#6:8',
+  RP2:'A5:2 A5:2 A5:2 A5:2 C6:2 C6:2 E6:4 | B5:1 B5:1 B5:1 B5:1 G#5:2 B5:2 E6:2 r:2 E6:2 E6:2',
+  RC1:'E6:8 D6:4 C6:4 | A#5:8 D6:8',
+  RC2:'F6:1 E6:1 D6:1 C6:1 D6:1 C6:1 A5:1 F5:1 A5:1 C6:1 D6:1 F6:1 D6:2 A5:2 | E6:1 D6:1 B5:1 G#5:1 B5:1 D6:1 E6:1 G#6:1 E6:2 B5:2 G#5:2 E5:2',
+  RC3:'A5:8 C6:4 E6:4 | F6:8 C6:4 A5:4',
+  RC4:'D6:1 A#5:1 F5:1 A#5:1 D6:1 F6:1 D6:1 A#5:1 D6:2 F6:2 D6:2 A#5:2 | G#5:2 B5:2 E6:4 G#5:2 B5:2 E6:2 B5:2',
+  RB1:'D6:8 A5:8 | A#5:8 F5:8',
+  RB2:'E6:8 C6:8 | B5:8 G#5:4 B5:4',
+  RO1:'E6:2 B5:2 G#5:2 E5:2 B5:2 G#5:2 E5:2 B4:2 | E5:8 r:8'
+};
+// Ackord: tre toner + oktav över grundtonen (midi-nummer), och basens grundton
+const CH={Am:[69,72,76,81],F:[65,69,72,77],C:[60,64,67,72],G:[67,71,74,79],Em:[64,67,71,76],Dm:[62,65,69,74],E:[64,68,71,76],Bb:[70,74,77,82]};
+const BASS={Am:45,F:41,C:48,G:43,Em:40,Dm:38,E:40,Bb:46};
+// Arpeggiomönster (index i ackordet per sextondelssteg, -1 = paus)
+const ARP={
+  shim:[0,1,2,3,2,1,2,3,0,1,2,3,2,1,2,3],
+  pulse8:[0,-1,2,-1,1,-1,2,-1,0,-1,3,-1,2,-1,1,-1],
+  chor:[0,1,2,3,3,2,1,2,0,1,2,3,3,2,3,1],
+  rage:[0,-1,0,-1,2,-1,2,-1,0,-1,0,-1,3,-1,2,-1]
+};
+const VERSE=['Am','F','C','G','Am','F','G','E'],PRE=['F','G','Am','E'],CHOR=['F','G','Em','Am','F','G','C','E'];
+const SECS_N=[
+  {chords:['Am','F','C','G'],lead:['I1','I2'],arp:'shim',ao:12,av:.06,bass:'long',drum:['none','none','hats','hats']},      // intro
+  {chords:VERSE,lead:['V1','V2','V3','V4'],arp:'pulse8',ao:0,bass:'off',drum:'verse',fill:1},                              // vers 1
+  {chords:PRE,lead:['P1','P2'],arp:'chor',ao:12,bass:'off',drum:'pre',fill:1},                                            // uppbyggnad
+  {chords:CHOR,lead:['C1','C2','C3','C4'],arp:'chor',ao:12,bass:'roll',drum:'chorus',fill:1},                              // refräng
+  {chords:VERSE,lead:['V1','V2','V3','V4'],arp:'chor',ao:0,bass:'roll',drum:'chorus',fill:1,duty:.125},                    // vers 2 (fylligare)
+  {chords:PRE,lead:['P1','P2'],arp:'chor',ao:12,bass:'roll',drum:'pre',fill:1},
+  {chords:CHOR,lead:['C1','C2','C3','C4'],arp:'chor',ao:12,bass:'roll',drum:'chorus',fill:1},                              // refräng 2
+  {chords:['Dm','C','F','E'],lead:['B1','B2'],arp:'shim',ao:12,av:.06,bass:'long',drum:'none',fill:1},                     // brygga: trummorna tystnar
+  {chords:CHOR,lead:['C1','C2','C3','C4'],arp:'chor',ao:12,bass:'roll',drum:'chorus',fill:1,tr:2,duty:.5},                 // sista refrängen, en helton upp
+  {chords:['E','E'],lead:['O1'],arp:'shim',ao:12,av:.06,bass:'long',drum:['hats','hats'],fill:1}                           // utklang, leder tillbaka till början
+];
+// ----- grön bana: mer repetitiv (fraserna upprepas), och träklapp i stället för skarpa trummor -----
+const SECS_G=[
+  {chords:['Am','F','C','G'],lead:['I1','I2'],arp:'shim',ao:12,av:.06,bass:'long',drum:['none','none','woodl','woodl']},
+  {chords:['Am','F','C','G','Am','F','C','G'],lead:['V1','V2','V1','V2'],arp:'pulse8',ao:0,bass:'off',drum:'wood',fill:1},
+  {chords:PRE,lead:['P1','P2'],arp:'pulse8',ao:12,bass:'off',drum:'wood2',fill:1},
+  {chords:['F','G','Em','Am','F','G','Em','Am'],lead:['C1','C2','C1','C2'],arp:'pulse8',ao:12,bass:'off',drum:'wood2',fill:1},
+  {chords:['Am','F','C','G','Am','F','C','G'],lead:['V1','V2','V1','V2'],arp:'pulse8',ao:0,bass:'off',drum:'wood2',fill:1,duty:.125},
+  {chords:PRE,lead:['P1','P2'],arp:'pulse8',ao:12,bass:'off',drum:'wood2',fill:1},
+  {chords:['F','G','Em','Am','F','G','Em','Am'],lead:['C1','C2','C1','C2'],arp:'pulse8',ao:12,bass:'off',drum:'wood2',fill:1},
+  {chords:['Dm','C','F','E'],lead:['B1','B2'],arp:'shim',ao:12,av:.06,bass:'long',drum:'woodl',fill:1},
+  {chords:CHOR,lead:['C1','C2','C3','C4'],arp:'chor',ao:12,bass:'off',drum:'wood2',fill:1,tr:2,duty:.5},
+  {chords:['E','E'],lead:['O1'],arp:'shim',ao:12,av:.06,bass:'long',drum:['woodl','woodl'],fill:1}
+];
+// ----- röd bana: argare melodi (Bb-ackord, staccato) och en refräng som växlar mellan långa toner och snabba löpningar -----
+const RVERSE=['Am','Bb','Dm','E','Am','Bb','F','E'],RPRE=['Dm','E','Am','E'],RCHOR=['Am','Bb','Dm','E','Am','F','Bb','E'];
+const SECS_R=[
+  {chords:['Am','Bb','Am','E'],lead:['RI1','RI2'],arp:'shim',ao:12,av:.06,bass:'long',drum:['none','hats','hats','hats']},
+  {chords:RVERSE,lead:['RV1','RV2','RV3','RV4'],arp:'rage',ao:0,bass:'roll',drum:'rverse',fill:1,duty:.125},
+  {chords:RPRE,lead:['RP1','RP2'],arp:'chor',ao:12,bass:'roll',drum:'pre',fill:1},
+  {chords:RCHOR,lead:['RC1','RC2','RC3','RC4'],arp:'chor',ao:12,bass:'roll',drum:'rage',fill:1},
+  {chords:RVERSE,lead:['RV1','RV2','RV3','RV4'],arp:'rage',ao:0,bass:'roll',drum:'rage',fill:1,duty:.25},
+  {chords:RPRE,lead:['RP1','RP2'],arp:'chor',ao:12,bass:'roll',drum:'pre',fill:1},
+  {chords:RCHOR,lead:['RC1','RC2','RC3','RC4'],arp:'chor',ao:12,bass:'roll',drum:'rage',fill:1},
+  {chords:['Dm','Bb','Am','E'],lead:['RB1','RB2'],arp:'shim',ao:12,av:.06,bass:'long',drum:'none',fill:1},
+  {chords:RCHOR,lead:['RC1','RC2','RC3','RC4'],arp:'chor',ao:12,bass:'roll',drum:'rage',fill:1,tr:2,duty:.5},
+  {chords:['E','E'],lead:['RO1'],arp:'shim',ao:12,av:.06,bass:'long',drum:['hats','hats'],fill:1}
+];
+const SEMI={C:0,D:2,E:4,F:5,G:7,A:9,B:11},phCache={};
+function parsePhrase(name){
+  if(phCache[name])return phCache[name];
+  const ev=[];let s=0;
+  for(const tk of PHR[name].split(/\s+/)){
+    if(tk==='|')continue;
+    const [n,d]=tk.split(':'),len=+d;
+    if(n!=='r'){const m=/^([A-G])(#?)(\d)$/.exec(n);ev.push({s,d:len,m:12*(+m[3]+1)+SEMI[m[1]]+(m[2]?1:0)})}
+    s+=len;
+  }
+  return phCache[name]={ev,total:s};
+}
+function buildSong(secs){
+  const out=[];
+  for(const sc of secs)sc.chords.forEach((c,b)=>{
+    const ph=parsePhrase(sc.lead[b>>1]),h=b&1;
+    out.push({ch:c,sc,ev:ph.ev.filter(e=>(e.s>>4)===h).map(e=>({s:e.s&15,d:e.d,m:e.m})),
+      dr:Array.isArray(sc.drum)?sc.drum[b]:sc.drum,fill:sc.fill&&b===sc.chords.length-1});
+  });
+  return out;
+}
+const SONGS=[buildSong(SECS_N),buildSong(SECS_G),buildSong(SECS_R)],mus={on:false,step:0,t:0,th:0};
+const pwc={};
+function pw(d){ // pulsvåg med given pulsbredd (12,5 / 25 / 50 %), som en NES-kanal
+  return pwc[d]||(()=>{const n=40,re=new Float32Array(n),im=new Float32Array(n);
+    for(let k=1;k<n;k++){re[k]=Math.sin(2*Math.PI*k*d)/(Math.PI*k);im[k]=(1-Math.cos(2*Math.PI*k*d))/(Math.PI*k)}
+    return pwc[d]=ac.createPeriodicWave(re,im)})();
+}
+const mf=m=>440*Math.pow(2,(m-69)/12);
+function mpulse(m,t,dur,vol,duty,vib){
+  const o=ac.createOscillator(),gn=ac.createGain();
+  o.setPeriodicWave(pw(duty));o.frequency.value=mf(m);if(vib&&dur>SD*2.5){ // NES-vibrato: sätter in efter en kort stund och svajar tydligt
+    const l=ac.createOscillator(),lg=ac.createGain();l.frequency.value=6;
+    lg.gain.setValueAtTime(0,t+SD*1.2);lg.gain.linearRampToValueAtTime(34,t+SD*1.2+.14);
+    l.connect(lg);lg.connect(o.detune);l.start(t);l.stop(t+dur+.02);
+  }
+  gn.gain.setValueAtTime(vol,t);gn.gain.linearRampToValueAtTime(vol*.7,t+dur*.8);gn.gain.linearRampToValueAtTime(0,t+dur);
+  o.connect(gn);gn.connect(vib?mus.lf:mus.af);o.start(t);o.stop(t+dur+.02);
+}
+function mtri(m,t,dur,vol){
+  const o=ac.createOscillator(),gn=ac.createGain();o.type='triangle';o.frequency.value=mf(m);
+  gn.gain.setValueAtTime(vol,t);gn.gain.linearRampToValueAtTime(vol*.8,t+dur*.7);gn.gain.linearRampToValueAtTime(0,t+dur);
+  o.connect(gn);gn.connect(mus.bus);o.start(t);o.stop(t+dur+.02);
+}
+function mnoise(t,dur,vol,type,f0,f1){
+  const s=ac.createBufferSource(),f=ac.createBiquadFilter(),gn=ac.createGain();
+  s.buffer=nbuf;f.type=type;f.frequency.setValueAtTime(f0,t);f.frequency.exponentialRampToValueAtTime(f1,t+dur);
+  gn.gain.setValueAtTime(vol,t);gn.gain.exponentialRampToValueAtTime(.001,t+dur);
+  s.connect(f);f.connect(gn);gn.connect(mus.bus);s.start(t,Math.random()*.5,dur+.02);
+}
+function kick(t){const o=ac.createOscillator(),gn=ac.createGain();o.frequency.setValueAtTime(170,t);o.frequency.exponentialRampToValueAtTime(42,t+.11);
+  gn.gain.setValueAtTime(.9,t);gn.gain.exponentialRampToValueAtTime(.001,t+.16);o.connect(gn);gn.connect(mus.bus);o.start(t);o.stop(t+.18);mnoise(t,.02,.25,'lowpass',900,300)}
+function snare(t,v){mnoise(t,.13,.45*v,'bandpass',2100,1500);const o=ac.createOscillator(),gn=ac.createGain();o.type='triangle';o.frequency.setValueAtTime(220,t);o.frequency.exponentialRampToValueAtTime(110,t+.07);
+  gn.gain.setValueAtTime(.3*v,t);gn.gain.exponentialRampToValueAtTime(.001,t+.09);o.connect(gn);gn.connect(mus.bus);o.start(t);o.stop(t+.1)}
+const hat=(t,v,open)=>mnoise(t,open?.1:.03,.2*v,'highpass',open?7000:9000,open?7000:9000);
+// träklapp (grön bana): mjuka, korta "tock" i stället för skarpa trummor
+function wood(t,v,hi){
+  const o=ac.createOscillator(),gn=ac.createGain(),f=hi?430:300; // lågt och under melodins register så att de inte förstärker varandra
+  o.type='sine';o.frequency.setValueAtTime(f*1.1,t);o.frequency.exponentialRampToValueAtTime(f,t+.025);
+  gn.gain.setValueAtTime(.0001,t);gn.gain.linearRampToValueAtTime(.3*v,t+.005);gn.gain.exponentialRampToValueAtTime(.001,t+.1);
+  o.connect(gn);gn.connect(mus.wf);o.start(t);o.stop(t+.12);
+}
+function thump(t,v){const o=ac.createOscillator(),gn=ac.createGain();o.frequency.setValueAtTime(90,t);o.frequency.exponentialRampToValueAtTime(50,t+.1);
+  gn.gain.setValueAtTime(.28*v,t);gn.gain.exponentialRampToValueAtTime(.001,t+.13);o.connect(gn);gn.connect(mus.bus);o.start(t);o.stop(t+.15)}
+function wooden(p,s,fill,t){
+  if(fill&&s>=8){wood(t,.5+(s-8)*.06,s%2===0);return}   // upptakt: stigande rulle av tocks
+  const beat=s%4===0;
+  if(p==='woodl'){if(beat)wood(t,s%8===0?1:.75,s%8===0);return}
+  if(s===0||s===8)thump(t,.7);
+  if(s%2===0)wood(t,beat?1:.7,beat);else if(p==='wood2')wood(t,.18,true); // wood2: även mjuka spöktocks på sextondelarna
+}
+function drums(p,s,fill,t){
+  if(p[0]==='w'){wooden(p,s,fill,t);return}
+  if(fill&&s>=8){if(s>=12||s%2===0)snare(t,.35+(s-8)*.1);return}
+  const four=s%4===0;
+  if(p==='hats'){if(s%4===2)hat(t,.5,1)}
+  else if(p==='verse'){if(s===0||s===8||s===10)kick(t);if(s===4||s===12)snare(t,.8);if(s%4===2)hat(t,.55,0)}
+  else if(p==='pre'){if(four)kick(t);if(s===4||s===12)snare(t,.8);if(s%2===0)hat(t,.45,0)}
+  else if(p==='chorus'){if(four)kick(t);if(s===4||s===12)snare(t,.9);if(s%4===2)hat(t,.55,1);else if(s%2===1)hat(t,.3,0)}
+  else if(p==='rverse'){if([0,6,8,11].includes(s))kick(t);if(s===4||s===12)snare(t,.85);if(s%4===2)hat(t,.55,0)}
+  else if(p==='rage'){if([0,3,6,8,11,14].includes(s))kick(t);if(s===4||s===12)snare(t,1);if(s===10)hat(t,.6,1);else hat(t,s%2?.22:.38,0)}
+}
+function playStep(i,t){
+  if((i&15)===0)mus.th=L.world?0:(L.theme||0); // musikvarianten byts vid taktgräns när banans tema ändras
+  const b=SONGS[mus.th][i>>4],s=i&15,sc=b.sc,tr=sc.tr||0,ch=CH[b.ch],root=BASS[b.ch]+tr;
+  for(const e of b.ev)if(e.s===s)mpulse(e.m+tr,t,e.d*SD*.96,.22,sc.duty||.25,true);                         // melodi
+  const ai=ARP[sc.arp][s];if(ai>=0)mpulse(ch[ai]+(sc.ao||0)+tr,t,SD*(sc.arp==='pulse8'?1.8:.9),sc.av||.08,.125,false); // arpeggio
+  if(sc.bass==='long'){if(s===0)mtri(root,t,SD*15.5,.32)}                                                 // bas
+  else if(sc.bass==='off'){if(s%4===2)mtri(root,t,SD*2.6,.32)}
+  else if(s%4)mtri(root+(s%4===2?12:0),t,SD*1.1,.3);
+  drums(b.dr,s,b.fill,t);
+}
+function musicTick(){
+  while(mus.t<ac.currentTime+.18){playStep(mus.step,mus.t);mus.t+=SD;mus.step=(mus.step+1)%(SONGS[0].length*16)}
+}
+function musicStart(){
+  if(!ac||mus.on)return;
+  mus.bus=ac.createGain();mus.bus.gain.value=MUS_VOL;mus.bus.connect(master);
+  mus.lf=ac.createBiquadFilter();mus.lf.type='lowpass';mus.lf.frequency.value=2000;mus.lf.Q.value=.6;mus.lf.connect(mus.bus); // mjukare melodiklang
+  mus.af=ac.createBiquadFilter();mus.af.type='lowpass';mus.af.frequency.value=3400;mus.af.connect(mus.bus);
+  mus.wf=ac.createBiquadFilter();mus.wf.type='lowpass';mus.wf.frequency.value=850;mus.wf.connect(mus.bus); // mjukar träklappen                   // dämpar arpeggiots skärpa
+  const v=ac.createOscillator();v.frequency.value=5.2;mus.vg=ac.createGain();mus.vg.gain.value=9;v.connect(mus.vg);v.start(); // lätt vibrato i melodin
+  mus.on=true;mus.step=0;mus.t=ac.currentTime+.15;setInterval(musicTick,30);
+}
+addEventListener('keydown',e=>{if(e.code==='KeyN'&&mus.bus&&!e.repeat)mus.bus.gain.value=mus.bus.gain.value?0:MUS_VOL});
+document.addEventListener('visibilitychange',()=>{if(ac&&started)document.hidden?ac.suspend():ac.resume()}); // pausa i bakgrundsflik
+function update(dt){
+  if(P.dead||P.won)return;
+  let dx=(keys.ArrowRight||keys.KeyD?1:0)-(keys.ArrowLeft||keys.KeyA?1:0);
+  let dy=(keys.ArrowDown||keys.KeyS?1:0)-(keys.ArrowUp||keys.KeyW?1:0);
+  P.moving=!!(dx||dy);
+  const ox=P.x,oy=P.y;
+  if(P.moving){
+    const l=Math.hypot(dx,dy);dx/=l;dy/=l;P.ax=dx;P.ay=dy;
+    if(Math.abs(dy)>=Math.abs(dx)&&dy)P.dir=dy>0?2:0;else if(dx)P.dir=dx>0?1:3;
+    P.t+=dt*13;
+    const sp=SPEED*dt;
+    tryMove(dx*sp,0);tryMove(0,dy*sp);
+  }
+  if(dt>0){const k=Math.min(1,dt*25);pv.x+=((P.x-ox)/dt-pv.x)*k;pv.y+=((P.y-oy)/dt-pv.y)*k}
+  combat(dt);ents(dt);
+  // byte av rum
+  if(P.x<0){L.rx--;P.x+=W*T;clr()}else if(P.x>=W*T){L.rx++;P.x-=W*T;clr()}
+  if(P.y<0){L.ry--;P.y+=H*T;clr()}else if(P.y>=H*T){L.ry++;P.y-=H*T;clr()}
+  L.seen.add(L.k(L.rx,L.ry));
+  // nyckel och utgång
+  if(!L.hasKey&&L.rx===L.key[0]&&L.ry===L.key[1]&&Math.hypot(P.x-W*T/2,P.y-H*T/2)<20){L.hasKey=true;sfx.key()}
+  if(L.rx===L.exit[0]&&L.ry===L.exit[1]&&Math.hypot(P.x-W*T/2,P.y-H*T/2)<18){
+    if(L.hasKey){sfx.unlock();const n=L.lv+1;if(n>=100){P.won=true;return}newLevel(hash(L.seed+1,n,7),n);P.x=W*T/2;P.y=H*T/2}
+    else if(performance.now()>lockT){sfx.locked();lockT=performance.now()+900}
+  }
+  if(L.world)for(const p of L.portals)if(p.rx===L.rx&&p.ry===L.ry&&Math.hypot(P.x-p.x,P.y-p.y)<14){lastPortal=p;beginGame(p.lv);return} // portal: in i banan
+  if(msgT>0)msgT-=dt;
+}
+function say(t){msg=t;msgT=2}
+
+// ---------- ritning ----------
+// ---------- banteman: 0 = standard (lila), 1 = grön (fler sjöborrar), 2 = rödaktig (fler gummibollar) ----------
+const THEME_CHANCE=.25; // chans per tema (grönt resp. rött) för varje ny bana; resten blir standard. Bana 1 är alltid standard.
+const THEMES=[
+  {border:'#3a2f52',floor:'#1d1830',check:'#221c38',
+   stone:{top:'#a29cd0',left:'#7d77ae',right:'#4b4674',bottom:'#302b52',mid:'#6b659a',glint:'#d9d5f2',ol:'#17122a'},
+   crumb:{top:'#aa9b82',left:'#9a8b71',right:'#7c6e57',bottom:'#6a5d48',mid:'#8e7f67',cl:'#d2c2a4',cd:'#1f1710',ol:'#241c14'}},
+  {border:'#2f5242',floor:'#14261f',check:'#18302a',
+   stone:{top:'#9ccaa8',left:'#72a283',right:'#436b52',bottom:'#2a4636',mid:'#5f8f72',glint:'#d8f2df',ol:'#0f1d16'},
+   crumb:{top:'#a8a882',left:'#979871',right:'#767757',bottom:'#64654a',mid:'#8a8a66',cl:'#ccd0a8',cd:'#1c1f10',ol:'#1c2012'}},
+  {border:'#5a2f3c',floor:'#2a1824',check:'#31202c',
+   stone:{top:'#c9a0b0',left:'#a67888',right:'#6e4558',bottom:'#46283a',mid:'#8c5c70',glint:'#f2d8e0',ol:'#24101a'},
+   crumb:{top:'#b09182',left:'#a08070',right:'#80604f',bottom:'#6d4f40',mid:'#92725f',cl:'#d8b8a0',cd:'#25140d',ol:'#2a1810'}},
+  {border:'#2f5a2a',floor:'#2d6a2d',check:'#316f31', // 3 = världskartan (gräsgolv); stone används inte där, crumb = förstörbara block i lerbrunt
+   stone:{top:'#a8a8b4',left:'#8a8a98',right:'#5c5c6c',bottom:'#40404e',mid:'#767686',glint:'#dcdce8',ol:'#1a1a24'},
+   crumb:{top:'#b59a6a',left:'#a28858',right:'#826a40',bottom:'#6e5833',mid:'#947b4c',cl:'#dcc590',cd:'#251a0a',ol:'#2a1e0c'}}
+];
+const th=()=>THEMES[L.theme||0];
+function pickTheme(seed,lv){
+  if(lv<=1)return 0;
+  const x=mulberry32(seed^0x9e3779b1)();
+  return x<THEME_CHANCE?1:x<2*THEME_CHANCE?2:0;
+}
+function stone(px,py){ // fasetterat block: fyra lutande sidor och en platt mitt, ljus uppifrån vänster
+  const S=th().stone,b=8,e=px+T,f=py+T;
+  poly(S.top,[[px,py],[e,py],[e-b,py+b],[px+b,py+b]]);
+  poly(S.left,[[px,py],[px+b,py+b],[px+b,f-b],[px,f]]);
+  poly(S.right,[[e,py],[e,f],[e-b,f-b],[e-b,py+b]]);
+  poly(S.bottom,[[px,f],[px+b,f-b],[e-b,f-b],[e,f]]);
+  g.fillStyle=S.mid;g.fillRect(px+b,py+b,T-2*b,T-2*b);
+  poly(S.glint,[[px+b+2,py+b+2],[px+b+8,py+b+2],[px+b+2,py+b+8]]);
+  g.strokeStyle=S.ol;g.lineWidth=1;g.strokeRect(px+.5,py+.5,T-1,T-1);
+}
+function crumbly(px,py,x,y,s){ // matt, sprucken sten i varma gråtoner; s = skadenivå (0-2), fler och bredare sprickor ju närmare den går sönder
+  const K=th().crumb;
+  const b=8,e=px+T,f=py+T,m=(x*7+y*3)&1,X=v=>px+(m?T-v:v),r=mulberry32(x*131+y*17+5);
+  poly(K.top,[[px,py],[e,py],[e-b,py+b],[px+b,py+b]]);
+  poly(K.left,[[px,py],[px+b,py+b],[px+b,f-b],[px,f]]);
+  poly(K.right,[[e,py],[e,f],[e-b,f-b],[e-b,py+b]]);
+  poly(K.bottom,[[px,f],[px+b,f-b],[e-b,f-b],[e,f]]);
+  g.fillStyle=K.mid;g.fillRect(px+b,py+b,T-2*b,T-2*b);
+  for(let i=0;i<9;i++){g.fillStyle=i%2?'#ffffff1c':'#0000001f';g.fillRect(px+2+r()*(T-6),py+2+r()*(T-6),2,2)}
+  if(s){g.fillStyle='rgba(0,0,0,'+(.08*s)+')';g.fillRect(px,py,T,T)}
+  const main=[[17,3],[14,10],[19,15],[13,21],[17,29]];
+  const more=[[[13,21],[7,24],[5,30]],[[19,15],[26,13],[29,7]],[[14,10],[9,6],[10,2]],[[17,26],[23,25],[27,29]]].slice(0,s*2);
+  const lines=[[main,2+s*.9],[[[14,10],[8,12]],1.2],[[[19,15],[25,17]],1.2],...more.map(p=>[p,1.3+s*.3])];
+  const trace=(pts,dx,dy)=>{g.beginPath();pts.forEach(([u,v],i)=>i?g.lineTo(X(u)+dx,py+v+dy):g.moveTo(X(u)+dx,py+v+dy))};
+  g.lineJoin='round';g.lineCap='round';
+  g.strokeStyle=K.cl;for(const [p,w] of lines){g.lineWidth=w*.7;trace(p,m?-1.4:1.4,.8);g.stroke()} // ljus kant = djup
+  g.strokeStyle=K.cd;for(const [p,w] of lines){g.lineWidth=w;trace(p,0,0);g.stroke()}               // själva sprickan
+  g.strokeStyle=K.ol;g.lineWidth=1;g.strokeRect(px+.5,py+.5,T-1,T-1);
+}
+function block(x,y,t,h){
+  const px=x*T,py=y*T;
+  if(t===1)stone(px,py);
+  else if(t===2)crumbly(px,py,x,y,h?h[1]-h[0]:0);
+  else BLK[t].d(px,py,x,y);
+}
+function drawExit(cx,cy,on){ // utgång: rund metallplatta med fasad kant, infälld mitt och ett nyckelhål med innerskugga
+  const [lt,md,dk]=on?['#fff0a0','#e8b830','#9a6a10']:['#9a9ab4','#62627c','#37374e'],P1=Math.PI;
+  if(on){g.fillStyle='rgba(255,216,74,'+(.22+.12*Math.sin(performance.now()/200))+')';g.beginPath();g.arc(cx,cy,22,0,7);g.fill()}
+  ell('#0008',cx+1.5,cy+2.5,16.5,15.5);
+  g.fillStyle=md;g.beginPath();g.arc(cx,cy,16,0,7);g.fill();
+  g.lineWidth=3.2;
+  g.strokeStyle=lt;g.beginPath();g.arc(cx,cy,14.4,P1*.75,P1*1.75);g.stroke();   // ljus kant uppe till vänster
+  g.strokeStyle=dk;g.beginPath();g.arc(cx,cy,14.4,P1*1.75,P1*2.75);g.stroke();  // mörk kant nere till höger
+  g.fillStyle=md;g.beginPath();g.arc(cx,cy,11.2,0,7);g.fill();                   // infälld platta (omvänd skuggning)
+  g.lineWidth=1.6;
+  g.strokeStyle=dk;g.beginPath();g.arc(cx,cy,11.2,P1*.75,P1*1.75);g.stroke();
+  g.strokeStyle=lt;g.beginPath();g.arc(cx,cy,11.2,P1*1.75,P1*2.75);g.stroke();
+  const kh=()=>{g.beginPath();g.arc(cx,cy-3,3.8,0,7);g.moveTo(cx-2.3,cy);g.lineTo(cx-4,cy+8.5);g.lineTo(cx+4,cy+8.5);g.lineTo(cx+2.3,cy);g.closePath()};
+  g.save();g.translate(1,1);kh();g.fillStyle=lt;g.fill();g.restore();           // ljus underkant på hålet
+  g.save();kh();g.clip();
+  const gr=g.createLinearGradient(cx-4,cy-7,cx+4,cy+9);
+  gr.addColorStop(0,on?'#fff7c4':'#000');gr.addColorStop(1,on?'#e0a020':'#3a3050');
+  g.fillStyle=gr;g.fillRect(cx-6,cy-8,12,18);
+  g.translate(2,2);kh();g.strokeStyle=on?'#7a5208':'#000';g.lineWidth=3;g.stroke(); // innerskugga uppe till vänster
+  g.restore();
+}
+function drawPortals(){ // portal: liten stående dörr med rund överdel och banans nummer ovanför
+  const t=performance.now()/1000;
+  for(const p of L.portals){
+    if(p.rx!==L.rx||p.ry!==L.ry)continue;
+    const cx=p.x,by=p.y+14,w=10,h=26,arch=(a,b)=>{g.beginPath();g.moveTo(cx-a,by);g.lineTo(cx-a,by-b+a);g.arc(cx,by-b+a,a,Math.PI,0);g.lineTo(cx+a,by);g.closePath()};
+    g.fillStyle='rgba(140,170,255,'+(.10+.06*Math.sin(t*3+p.lv))+')';g.beginPath();g.ellipse(cx,by-h/2,w+9,h/2+8,0,0,7);g.fill(); // sken
+    ell('#0007',cx+1,by+1,w+2,3);
+    arch(w,h);g.fillStyle='#8c869c';g.fill();g.lineWidth=1.5;g.strokeStyle='#1a1428';g.stroke(); // karm
+    arch(7,23);const gr=g.createLinearGradient(0,by-23,0,by);gr.addColorStop(0,'#1a1040');gr.addColorStop(1,'#6a7cff');g.fillStyle=gr;g.fill(); // ljus öppning
+    g.fillStyle='rgba(255,255,255,'+(.3+.25*Math.sin(t*4+p.lv))+')';g.fillRect(cx-1,by-14+Math.sin(t*2+p.lv)*4,2,2);
+    const s='bana '+p.lv;g.font='bold 10px "Courier New",monospace';g.textAlign='center';g.lineJoin='round';g.lineWidth=3;
+    g.strokeStyle='#000';g.strokeText(s,cx,by-h-5);g.fillStyle='#ffd84a';g.fillText(s,cx,by-h-5);g.textAlign='left';
+  }
+}
+function drawKey(cx,cy){ // nyckel med skuggad, rundad guldyta
+  const t=performance.now(),y=cy+Math.sin(t/250)*2,lt='#fff0a0',md='#e8b830',dk='#9a6a10',ol='#5a3a06';
+  ell('#0006',cx+2,cy+12,11,2.6);
+  const gr=g.createLinearGradient(0,y-3,0,y+3);gr.addColorStop(0,lt);gr.addColorStop(.45,md);gr.addColorStop(1,dk);
+  g.fillStyle=gr;g.fillRect(cx-2,y-2.4,17,4.8);g.fillRect(cx+8,y+2.4,3.2,4.6);g.fillRect(cx+12.2,y+2.4,3,3);
+  g.fillStyle=dk;g.fillRect(cx+10,y+2.4,1.2,4.6);g.fillRect(cx+14.2,y+2.4,1,3);
+  g.strokeStyle=ol;g.lineWidth=1;g.strokeRect(cx-1.5,y-1.9,16,3.8);
+  ell(ol,cx-8,y,7.7,7.7);ell(dk,cx-8,y,7,7);ell(md,cx-8.6,y-.6,6.2,6.2);
+  g.strokeStyle=lt;g.lineWidth=1.5;g.beginPath();g.arc(cx-8.6,y-.6,5,Math.PI*.9,Math.PI*1.65);g.stroke();
+  ell(lt,cx-7.2,y+.8,3,3);ell('#1a1208',cx-8,y,3,3);ell('#000',cx-8.5,y-.5,2.2,2.2);
+  if(Math.sin(t/400)>.8){ln('#fff',1,cx-13,y-8,cx-13,y-3,'butt');ln('#fff',1,cx-15.5,y-5.5,cx-10.5,y-5.5,'butt')}
+}
+function draw(){
+  const m=room(L.rx,L.ry);
+  g.fillStyle=th().floor;g.fillRect(0,0,cv.width,cv.height);
+  for(let y=0;y<H;y++)for(let x=0;x<W;x++){
+    if((x+y)%2===0){g.fillStyle=th().check;g.fillRect(x*T,y*T,T,T)}
+    if(m[y][x])block(x,y,m[y][x],m.hp[y*W+x]);
+  }
+  const cx=W*T/2,cy=H*T/2;
+  if(L.rx===L.exit[0]&&L.ry===L.exit[1])drawExit(cx,cy,L.hasKey);
+  if(!L.hasKey&&L.rx===L.key[0]&&L.ry===L.key[1])drawKey(cx,cy);
+  if(L.world)drawPortals();
+  drawEnts();drawFx();
+  hud();if(P.dead)gameOver();if(P.won)victory();
+}
+// ---------- spelfigur: valkyria (stående i alla vyer, ca 50 px hög) ----------
+const C={skin:'#f6d2ae',skinS:'#d9a584',hair:'#f2c24c',hairS:'#b9832a',steel:'#d6e0f2',steelS:'#8ea2c6',gold:'#ffd84a',goldS:'#b98a1a',skirt:'#8ea8d2',skirtS:'#566f9a',boot:'#b02a48',bootS:'#6e1430',wing:'#ffffff',wingS:'#b4c9ea',eye:'#2d4f9a'};
+const poly=(col,p)=>{g.fillStyle=col;g.beginPath();g.moveTo(p[0][0],p[0][1]);for(let i=1;i<p.length;i++)g.lineTo(p[i][0],p[i][1]);g.closePath();g.fill()};
+const ell=(col,x,y,rx,ry,r=0)=>{g.fillStyle=col;g.beginPath();g.ellipse(x,y,rx,ry,r,0,7);g.fill()};
+const ln=(col,w,x1,y1,x2,y2,cap='round')=>{g.strokeStyle=col;g.lineWidth=w;g.lineCap=cap;g.beginPath();g.moveTo(x1,y1);g.lineTo(x2,y2);g.stroke()};
+const foot=(ax,ay,col)=>{
+  poly(col,[[ax-2.9,ay-1.5],[ax+2.4,ay-1.5],[ax+6.6,ay+4.4],[ax+6.2,ay+5.4],[ax+1.2,ay+3.4],[ax-.6,ay+3],[ax-.8,ay+6],[ax-3,ay+6],[ax-3.2,ay+1.5]]);
+  poly(C.goldS,[[ax-3.1,ay+3.2],[ax-.7,ay+3.2],[ax-.8,ay+6],[ax-3,ay+6]]); // klacken
+};
+function pteryges(n,w,wd,sh,hem,hw,col,edge,stud){ // stålremmar som i en romersk soldatkjol, utsvängda som en balettkjol
+  for(let i=0;i<n;i++){
+    const u=n>1?i/(n-1):.5,tx=-3.6+7.2*u,bx=-w-wd+2*(w+wd)*u+sh;
+    g.fillStyle=col;g.strokeStyle=edge;g.lineWidth=.6;g.beginPath();
+    g.moveTo(tx-1.3,-27);g.lineTo(bx-hw,hem);g.quadraticCurveTo(bx,hem+3.4,bx+hw,hem);g.lineTo(tx+1.3,-27);g.closePath();g.fill();g.stroke();
+    if(stud){ell(C.gold,tx+(bx-tx)*.3,-22.6,.7,.7);ell(C.gold,bx,hem+.9,.55,.55)}
+  }
+}
+function skirtFull(wd,sh){
+  pteryges(8,13.8,wd,sh,-16.8,2.1,C.skirtS,'#34466b',false);
+  pteryges(7,11.6,wd*.8,sh*.8,-19.6,2.2,C.skirt,C.skirtS,true);
+  ln(C.gold,1,-5.2+sh*.3,-25.3,5.2+sh*.3,-25.3,'butt');
+}
+function wing(x,y,dir,ang){ // tre fjädrar
+  for(let i=2;i>=0;i--){g.save();g.translate(x,y);g.rotate(dir*(.3+i*.5+ang));
+    ell(i===1?C.wingS:C.wing,0,-(4.8-i*.8),1.9,5.4-i*1.1);g.restore()}
+}
+function helmet(){
+  g.fillStyle=C.steel;g.beginPath();g.ellipse(0,-42.2,5.7,5.6,0,Math.PI,0);g.closePath();g.fill();
+  g.fillStyle=C.gold;g.fillRect(-5.9,-43.6,11.8,1.7);
+  poly(C.gold,[[-1.5,-47.4],[0,-51],[1.5,-47.4]]);
+  ell('#e0405a',0,-42.8,1.1,1.1);ln('#fff',.9,-3.4,-46,-1.4,-47.2);
+}
+function arm(x,o){ ln(C.skin,2.6,x,-33,x,-28+o*.5);ln(C.boot,3.2,x,-28+o*.5,x,-22.8+o);ln(C.gold,3.4,x,-28+o*.5,x,-27+o*.5,'butt');ell(C.skin,x,-21.4+o,1.5,1.5) }
+function facing(back,s,c,bob,idle,sw){
+  const lift=[Math.max(0,s)*3.2,Math.max(0,-s)*3.2];
+  [-1,1].forEach((sd,i)=>{const l=lift[i],x=sd*3.2;
+    ln(C.skin,3.6,x,-19,x,-15-l);
+    poly(C.boot,[[x-2.9,-16-l],[x+2.9,-16-l],[x+2.5,-5-l],[x+3.1,-2.4-l],[x,-.9-l],[x-3.1,-2.4-l],[x-2.5,-5-l]]);
+    g.fillStyle='#d04868';g.fillRect(x-1.6,-15-l,.9,9);
+    g.fillStyle=C.gold;g.fillRect(x-3.1,-17-l,6.2,1.5);
+    if(back){g.fillStyle=C.goldS;g.fillRect(x-1.2,-3.4-l,2.4,3.4)}else ell(C.bootS,x,-1.3-l,2,.8);
+  });
+  g.save();g.translate(0,bob);
+  if(!back)[-1,1].forEach(d=>poly(C.hair,[[d*5.4,-45],[d*8.3,-38],[d*8.9+d*sw*.6,-27],[d*7.2,-21.5],[d*5.3,-27],[d*4.7,-37]]));
+  skirtFull(Math.abs(sw)*.8,0);
+  g.fillStyle=C.skin;g.fillRect(-1.4,-37,2.8,3);
+  poly(back?C.steelS:C.steel,[[-4.6,-26],[4.6,-26],[6,-33.5],[3.4,-35.5],[-3.4,-35.5],[-6,-33.5]]);
+  if(!back){ell('#f2f7ff',-2.5,-31,2.6,2.3);ell('#f2f7ff',2.5,-31,2.6,2.3);ln(C.steelS,.8,0,-33.5,0,-28.5);ell('#e0405a',0,-29.2,1,1.2);ln(C.gold,1,-3.4,-35.3,3.4,-35.3)}
+  else{ln(C.gold,1,0,-35,0,-27)}
+  g.fillStyle=C.gold;g.fillRect(-4.9,-27.3,9.8,1.8);
+  for(const d of [-1,1]){ell(C.gold,d*6.8,-34.2,3.3,2.9);ell(C.steel,d*6.8,-34.2,2.6,2.2)}
+  arm(-7.4,-s*2);arm(7.4,s*2);
+  wing(-5.2,-43.5,-1,idle*.08);wing(5.2,-43.5,1,idle*.08);
+  if(back){
+    poly(C.hair,[[-6.2,-44.5],[6.2,-44.5],[7.4,-35],[7.6+sw*.5,-26],[5.6,-21.5],[3,-24.5],[0,-20.5],[-3,-24.5],[-5.6,-21.5],[-7.6+sw*.5,-26],[-7.4,-35]]);
+    ln(C.hairS,.9,-2.2,-42,-3,-26);ln(C.hairS,.9,2.4,-42,3.2,-26);
+  }else{
+    ell(C.skin,0,-39.4,4.6,5.2);
+    for(const d of [-1,1]){ell(C.eye,d*2,-39.2,1.15,1.7);ell('#fff',d*2-.4,-39.8,.45,.5);ln('#3a2410',.7,d*2-1.3,-40.9,d*2+1.3,-40.9,'butt');ell('#f0a8a0',d*3.1,-37.6,1,.6)}
+    ell('#d9667a',0,-36.6,.9,.5);
+    for(const d of [-1,1])poly(C.hair,[[d*5.4,-42],[d*4.8,-34],[d*3.8,-38.5],[d*4,-41.5]]);
+    poly(C.hair,[[-5,-42.2],[-1.6,-39.6],[0,-41.4],[1.8,-39.6],[5,-42.2]]);
+  }
+  helmet();
+  g.restore();
+}
+function side(s,c,bob,idle,sw){
+  const a1=P.moving?s*.5:0,a2=-a1;
+  const leg=(a,far)=>{
+    const sa=Math.sin(a),ca=Math.cos(a),ax=sa*16,ay=-22+ca*16,bx=sa*5.5,by=-22+ca*5.5,col=far?C.bootS:C.boot;
+    ln(far?C.skinS:C.skin,3.6,0,-22,bx,by);
+    ln(col,4.6,bx,by,ax,ay,'butt');
+    ln(C.gold,4.8,bx,by,bx+sa*1.3,by+ca*1.3,'butt');
+    foot(ax,ay,col);
+  };
+  leg(a2,true);leg(a1,false);
+  const sarm=(a,far)=>{const sa=Math.sin(a),ca=Math.cos(a),ex=sa*5.5,ey=-33.5+ca*5.5,hx=sa*10.5,hy=-33.5+ca*10.5;
+    ln(far?C.skinS:C.skin,2.6,0,-33.5,ex,ey);ln(far?C.bootS:C.boot,3.2,ex,ey,hx,hy);ln(C.gold,3.4,ex,ey,ex+(hx-ex)*.18,ey+(hy-ey)*.18,'butt');ell(far?C.skinS:C.skin,hx,hy,1.5,1.5)};
+  g.save();g.translate(0,bob);
+  sarm(-a1*1.1,true);
+  const fl=P.moving?2.5+c*1.3:.6+idle*.5;
+  poly(C.hair,[[-3,-45.5],[-6,-43.5],[-8.5-fl,-36],[-9.5-fl*1.5,-27],[-7-fl,-21.5],[-5.6-fl*.3,-27],[-4.4,-34],[-1,-41]]);
+  ln(C.hairS,.9,-5,-43,-7.5-fl,-26);
+  skirtFull(Math.abs(sw)*.6,-.8-(P.moving?c*.8+.8:idle*.3));
+  g.fillStyle=C.skin;g.fillRect(-1.2,-37,2.8,3);
+  poly(C.steel,[[-3.6,-26],[3.6,-26],[4.2,-33],[2.5,-35.5],[-3.2,-35.5],[-4,-32]]);
+  ell('#f2f7ff',3.2,-31.2,2.3,2.4);ln(C.steelS,.8,-3.4,-33,-3.4,-28);
+  g.fillStyle=C.gold;g.fillRect(-3.9,-27.3,7.8,1.8);
+  ell(C.gold,-.2,-34.2,3.3,2.9);ell(C.steel,-.2,-34.2,2.6,2.2);
+  sarm(a1*1.1,false);
+  ell(C.skin,1.2,-39.4,4.3,5.2);
+  poly(C.skin,[[5.1,-40.2],[6.7,-38.5],[5.1,-38]]);
+  ell(C.eye,3.3,-39.3,1,1.7);ell('#fff',2.9,-39.9,.45,.5);ln('#3a2410',.7,2.2,-41,4.4,-40.8,'butt');
+  ln('#d9667a',.8,4,-36.6,5,-36.5);ell('#f0a8a0',2.4,-37.5,1,.6);
+  poly(C.hair,[[5.3,-42.2],[3.6,-39.6],[1.2,-41],[-1.5,-39.4],[-3,-43]]);
+  poly(C.hair,[[-1.5,-41],[-3,-33.5],[-.4,-37.5],[1,-40]]);
+  ell(C.steel,-3,-40.5,3.2,4.4);
+  g.save();g.translate(.8,0);helmet();g.restore();
+  wing(-2,-44,-1,idle*.08+.25);ell(C.gold,-2,-44,1.2,1.2);
+  g.restore();
+}
+function drawPlayer(){
+  const mv=P.moving,s=mv?Math.sin(P.t):0,c=mv?Math.cos(P.t):0,idle=Math.sin(performance.now()/450);
+  const bob=mv?-Math.abs(c)*1.5:idle*.35,sw=mv?c*1.3:idle*.5;
+  const x=Math.round(P.x),y=Math.round(P.y+10);
+  ell('#0008',x,y,10,3.4);
+  g.save();g.translate(x,y);if(P.dir===3)g.scale(-1,1);
+  if(P.dir===1||P.dir===3)side(s,c,bob,idle,sw);else facing(P.dir===0,s,c,bob,idle,sw);
+  g.restore();
+}
+function hud(){
+  g.fillStyle='#000a';g.fillRect(0,0,cv.width,18);
+  g.fillStyle='#e8e0d0';g.font='12px "Courier New",monospace';
+  g.fillText(L.world?'Världskartan':'Bana '+(L.lv||1)+'   Nyckel: '+(L.hasKey?'ja':'nej'),6,13);
+  for(let i=0;i<P.max;i++)heart(190+i*13,9.5,5.2,P.hp>=2*i+2?1:P.hp>=2*i+1?.5:0);
+  // minikarta
+  for(const id of L.seen){const [a,b]=id.split(',').map(Number);
+    g.fillStyle=(a===L.rx&&b===L.ry)?'#ffd84a':'#6a6490';g.fillRect(cv.width-60+a*8+24,40+b*8,6,6)}
+  if(msgT>0){g.fillStyle='#000c';g.fillRect(106,176,300,32);g.fillStyle='#ffd84a';g.textAlign='center';g.fillText(msg,256,197);g.textAlign='left'}
+}
+
+// ---------- loop ----------
+newLevel((Math.random()*1e9)|0,START);
+let last=performance.now();
+(function frame(t){const dt=Math.min(0.05,(t-last)/1000);last=t;if(started){if(!qmenu)update(dt);draw();if(qmenu)drawQMenu()}else drawTitle(t/1000);requestAnimationFrame(frame)})(last);
+</script>
+</body>
+</html>
