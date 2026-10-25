@@ -105,17 +105,32 @@ const BLK={
   1:{s:1,p:1},2:{s:1,p:1},
   3:{s:0,p:0,d:(px,py,x,y)=>{ // gräs: fungerar som golv
     g.fillStyle=(x+y)%2?'#3f8f3a':'#449541';g.fillRect(px,py,T,T)}},
-  4:{s:1,p:1,d:(px,py,x,y)=>{ // träd: grön krona, liten brun stam, oförstörbart
+  4:{s:1,p:1,d:(px,py,x,y)=>{ // träd: bullig krona i tre gröna toner, rundad stam, liten markskugga, oförstörbart
     BLK[3].d(px,py,x,y);
-    g.fillStyle='#6b4423';g.fillRect(px+13,py+19,6,11);
-    g.fillStyle='#1d6b2c';g.beginPath();g.arc(px+16,py+13,12,0,7);g.fill()}},
-  5:{s:1,p:1,d:(px,py)=>{ // berg: grått, oförstörbart (som fasta block men annan färg)
-    g.fillStyle='#5c5c6a';g.fillRect(px,py,T,T);
-    g.fillStyle='#8a8a98';g.fillRect(px+2,py+2,T-4,T-4);
-    g.fillStyle='#a8a8b6';g.fillRect(px+4,py+4,T-14,T-14)}},
+    g.fillStyle='rgba(0,0,0,.2)';g.beginPath();g.ellipse(px+16,py+29,9,3,0,0,7);g.fill();
+    g.fillStyle='#8a5a30';g.fillRect(px+13,py+19,2,11);   // stam: ljus kant (ljus från övre vänster)
+    g.fillStyle='#6b4423';g.fillRect(px+15,py+19,2,11);
+    g.fillStyle='#4a2d17';g.fillRect(px+17,py+19,2,11);   // skuggsida
+    g.fillStyle='#14502a';g.beginPath();g.arc(px+16,py+13,12,0,7);g.fill();          // krona: skuggad bas
+    g.fillStyle='#1d6b2c';g.beginPath();g.arc(px+14.5,py+11.5,10,0,7);g.fill();      // mellanton
+    g.fillStyle='#2f8a3c';g.beginPath();g.arc(px+12.5,py+9.5,5,0,7);g.fill()}},      // ljus topp
+  5:{s:1,p:1,d:(px,py,x,y)=>{ // berg: samma fasetterade form som de förstörbara blocken, men kall blågrå ton, en bergsrygg i stället för sprickor, oförstörbart
+    const b=8,e=px+T,f=py+T,k=((x*7+y*3)&1)?2:-1; // k = liten variation i ryggens knyck så att bergen inte ser kopierade ut
+    poly('#a9adc4',[[px,py],[e,py],[e-b,py+b],[px+b,py+b]]);
+    poly('#8f93ab',[[px,py],[px+b,py+b],[px+b,f-b],[px,f]]);
+    poly('#6c708a',[[e,py],[e,f],[e-b,f-b],[e-b,py+b]]);
+    poly('#565a73',[[px,f],[px+b,f-b],[e-b,f-b],[e,f]]);
+    g.fillStyle='#7d819b';g.fillRect(px+b,py+b,T-2*b,T-2*b);
+    const R=[[24,8],[18+k,13],[16+k,18],[8,24]];                                    // bergsryggen, snett från övre höger till nedre vänster
+    poly('#62667f',[...R.map(([u,v])=>[px+u,py+v]),[px+24,py+24]]);               // skuggsidan under/höger om ryggen
+    g.strokeStyle='#9599b1';g.lineWidth=1.4;g.lineJoin='round';g.lineCap='round';
+    g.beginPath();R.forEach(([u,v],i)=>i?g.lineTo(px+u-1,py+v-.5):g.moveTo(px+u-1,py+v-.5));g.stroke(); // ljus rygg
+    g.strokeStyle='#3a3d52';g.lineWidth=1;g.strokeRect(px+.5,py+.5,T-1,T-1)}},
   6:{s:1,p:0,d:(px,py)=>{ // vatten: går inte att gå på, men skott flyger över
     g.fillStyle='#2b6fd1';g.fillRect(px,py,T,T);
-    g.fillStyle='#5b9cf0';g.fillRect(px+5,py+9,11,2);g.fillRect(px+16,py+21,11,2)}}
+    g.strokeStyle='#4a88e0';g.lineWidth=1.6;g.lineCap='round';g.lineJoin='round'; // två stiliserade vågor, en topp var, svagt ljusare än vattnet
+    const wave=(ox,oy)=>{g.beginPath();g.moveTo(px+ox,py+oy);g.quadraticCurveTo(px+ox+6,py+oy-1,px+ox+9,py+oy-6);g.quadraticCurveTo(px+ox+11,py+oy-1,px+ox+18,py+oy);g.stroke()};
+    wave(4,12);wave(9,26)}}
 };
 const solid=v=>!!v&&BLK[v].s===1;
 const LAND=[4,5,6]; // världskartans oförstörbara landtyper: träd, berg, vatten (används för ytterväggar och landbyper inne i rummen)
