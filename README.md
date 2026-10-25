@@ -2,6 +2,11 @@
 
 Archive repository for modified versions of the original game. Only changes introduced in this repository are documented. All other systems, enemies, mechanics and content remain unchanged from the original version.
 
+<p align="center">
+  <img src="Valkyria5 onion.png" width="49%">
+  <img src="world map.png" width="49%">
+</p>
+
 ## Play Online
  
 🎮 **Play Valkyria Advance in your browser**
