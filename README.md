@@ -8,6 +8,66 @@ Archive repository for modified versions of the original game. Only changes intr
 
 [https://olaelias.github.io/Valkyria-Advance/](https://olaelias.github.io/Valkyria-Advance/)
 
+## Valkyria8 grottoppning.html
+
+# World Map
+
+Persistent overworld used as a hub between dungeon runs.
+
+## Features
+
+- Generated once and reused throughout the session.
+- Built from the same room-generation system as dungeon levels.
+- Contains no enemies, keys, or exits.
+- Uses portals to access dungeon levels.
+- Preserves its state when revisited.
+
+## Terrain
+
+- Grass: walkable
+- Trees: blocks movement
+- Mountains: blocks movement
+- Water: blocks movement, allows projectiles
+
+## Portals
+
+Portals provide direct access to selected dungeon levels:
+
+- Level 1
+- Level 10
+- Level 20
+- Level 30
+- Level 40
+- Level 50
+- Level 60
+- Level 70
+- Level 80
+- Level 90
+
+Entering a portal starts the corresponding dungeon level.
+
+## Return System
+
+Press `Q` and select the world map to leave a dungeon.
+
+The player returns to the same portal that was used for entry.
+
+## Generation
+
+- Uses the existing room graph generator.
+- Floor tiles become grass.
+- Dungeon walls are replaced by trees, mountains, and water.
+- Portals are placed on valid grass tiles.
+
+## Purpose
+
+Provides:
+
+- Non-linear level selection
+- A persistent overworld
+- Fast travel to milestone levels
+- A more open progression structure
+
 ## Valkyria5 onion.html
 
 ## Fire Onion
