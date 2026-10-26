@@ -23,6 +23,9 @@ const T=32,W=16,H=12,cv=document.getElementById('c'),g=cv.getContext('2d');
 // START_LEVEL: reservvärde för bannivå. Banorna väljs numera via portalerna på världskartan (se PORTAL_LV). Ska vara 1.
 const START_LEVEL=1;
 let START=Math.min(99,Math.max(1,START_LEVEL|0));
+// BOSS_ROOM: bana där slutbossens rum ersätter den vanliga banan (normalt 99). Sätt t.ex. 2 för att testa bossen tidigt. När bossen besegras går spelet direkt till slutscenen.
+const BOSS_ROOM=99;
+const BOSS_HP=100; // slutbossens hälsa (varje träff tar Kraft i skada)
 let started=false; // false = visa startskärmen tills spelet startas (första tangenten leder till världskartan)
 // ---------- världskartan: en bana som alla andra men utan fiender, med portaler till banorna ----------
 const PORTAL_LV=[1,10,20,30,40,50,60,70,80,90]; // banor som portalerna på världskartan leder till (en portal per bana, slumpade rum)
@@ -62,7 +65,7 @@ function drawQMenu(){
 function beginGame(lv){
   START=lv;started=true;qmenu=false;sfx.unlock();
   P.dead=false;P.won=false;P.max=6;P.hp=12;P.inv=0;P.moving=false;P.kx=P.ky=0;
-  newLevel((Math.random()*1e9)|0,START);P.x=W*T/2;P.y=H*T/2;
+  newLevel((Math.random()*1e9)|0,START);P.x=W*T/2;P.y=L.boss?(H-2)*T:H*T/2;
 }
 
 // ---------- slump ----------
@@ -91,8 +94,9 @@ function newLevel(seed,lv,world){clr();
   const from=main[Math.min(3,main.length-2)||0];
   const br=walk(from[0],from[1],3);
   const keyRoom=br.length>1?br[br.length-1]:main[Math.max(1,main.length-3)];
-  L={seed,rooms,edges,ek,k,exit:main[main.length-1],key:keyRoom,hasKey:false,cache:new Map(),seen:new Set(['0,0']),rx:0,ry:0,lv:lv||START,world:!!world};
-  L.theme=world?3:pickTheme(seed,L.lv);cv.style.borderColor=THEMES[L.theme].border;
+  L={seed,rooms,edges,ek,k,exit:main[main.length-1],key:keyRoom,hasKey:false,cache:new Map(),seen:new Set(['0,0']),rx:0,ry:0,lv:lv||START,world:!!world,boss:!world&&(lv||START)===BOSS_ROOM};
+  L.theme=world?3:L.boss?0:pickTheme(seed,L.lv);cv.style.borderColor=THEMES[L.theme].border;
+  if(L.boss){L.rooms.clear();L.edges.clear();L.rooms.set('0,0',1);L.exit=L.key=[99,99]} // slutbossens bana: bara ett rum, utan dörrar, nyckel och utgång
   if(world){L.exit=L.key=[99,99];L.portals=[]} // världskartan har varken nyckel eller utgång, bara portaler
 }
 const open=(rx,ry,d)=>L.edges.has(L.ek(L.k(rx,ry),L.k(rx+DIRS[d][0],ry+DIRS[d][1])));
@@ -152,7 +156,7 @@ function room(rx,ry){
   const band=(x,y)=>x===7||x===8||y===5||y===6;
   const mid=(x,y)=>x>=6&&x<=9&&y>=4&&y<=7;
   m.hp={};
-  const want=8+Math.floor(r()*5);
+  const want=L.boss?0:8+Math.floor(r()*5);
   for(let i=0,put=0;i<90&&put<want;i++){
     let s=SHAPES[Math.floor(r()*SHAPES.length)].map(p=>p.slice());
     for(let q=Math.floor(r()*4);q>0;q--)s=s.map(([x,y])=>[-y,x]);
@@ -178,6 +182,13 @@ function room(rx,ry){
       i+=len;
     }
     for(let y=0;y<H;y++)for(let x=0;x<W;x++)if(m[y][x]===0)m[y][x]=3;
+  }
+  if(L.boss){ // slutbossens rum: bossen mitt i rummet och högsta antalet lökar (ENEMY_CAP) runt omkring
+    const bz=newEnemy(W*T/2,H*T/2,'z');bz.hp=bz.hpMax=BOSS_HP;m.en.push(bz);
+    const cand=[];for(let ty=1;ty<=H-2;ty++)for(let tx=1;tx<=W-2;tx++)if(Math.hypot(tx+.5-W/2,ty+.5-H/2)>=4&&Math.hypot(tx+.5-W/2,ty+.5-(H-2))>=3.5)cand.push([tx,ty]); // inte tätt intill bossen eller spelarens startplats
+    for(let i=cand.length-1;i>0;i--){const j=Math.floor(r()*(i+1));[cand[i],cand[j]]=[cand[j],cand[i]]}
+    const put=[];for(const c of cand){if(put.length>=ENEMY_CAP)break;if(put.every(q=>Math.hypot(q[0]-c[0],q[1]-c[1])>=2))put.push(c)}
+    put.forEach(([tx,ty])=>m.en.push(newEnemy(tx*T+T/2,ty*T+T/2,'o')));
   }
   if(!(rx===0&&ry===0)&&!L.world){ // inga fiender i startrummet (och inga alls på världskartan)
     const tm=L.theme,bonus=ENEMY_BASE_BONUS+Math.floor(((L.lv||1)-1)/ENEMY_STEP);
@@ -243,6 +254,7 @@ function buildWorld(){
 // ---------- spelare ----------
 const P={x:W*T/2,y:H*T/2,dir:2,t:0,moving:false,hs:10,ax:0,ay:1,burst:0,bt:0,cd:0,hp:12,max:6,inv:0,kx:0,ky:0,dead:false,won:false};
 const keys={};let msg='',msgT=0;
+let kraft=1; // Kraft: +1 per besegrad gummiboll, -0,5 per besegrad lök, aldrig under 1 (visas uppåtrundad som heltal i hud). Multiplicerar skadan på slutbossen (uppåtrundat). Nollställs bara när sidan laddas om
 const pv={x:0,y:0}; // spelarens faktiska hastighet (px/s), används för att sikta eldklot
 addEventListener('keydown',e=>{if(!started){if(!e.repeat&&!e.metaKey&&!e.ctrlKey&&!e.altKey){audioInit();e.preventDefault();toWorld()}return}audioInit();
   if(qmenu){e.preventDefault();if(!e.repeat)qKey(e.code);return}
@@ -252,7 +264,7 @@ addEventListener('keyup',e=>keys[e.code]=false);
 function restart(){if(P.dead){toWorld();return} // game over -> tillbaka till världskartan
   if(P.won){started=false;return} // vinst -> startskärmen och sedan världskartan
   if(L.world)return; // världskartan skapas bara en gång per session
-  P.inv=0;newLevel((Math.random()*1e9)|0,L.lv);P.x=W*T/2;P.y=H*T/2}
+  P.inv=0;newLevel((Math.random()*1e9)|0,L.lv);P.x=W*T/2;P.y=L.boss?(H-2)*T:H*T/2}
 const hit=(x,y)=>{
   const m=room(L.rx,L.ry);
   for(const [cx,cy] of [[x-P.hs,y-P.hs],[x+P.hs,y-P.hs],[x-P.hs,y+P.hs],[x+P.hs,y+P.hs]]){
@@ -298,7 +310,7 @@ function combat(dt){
     for(let k=0;k<n&&!dead;k++){
       o.x+=o.vx*dt/n;o.y+=o.vy*dt/n;
       if(o.x<-8||o.y<-8||o.x>W*T+8||o.y>H*T+8){dead=true;break}
-      const en=m.en.find(q=>Math.hypot(o.x-q.x,o.y-q.y)<12);
+      const en=m.en.find(q=>Math.hypot(o.x-q.x,o.y-q.y)<(q.k==='z'?20:12));
       if(en){dead=true;hitEnemy(en,m,o);sfx.shock();spark(o.x,o.y,8,['#fff','#bfe3ff','#8fc4ff'],140,.3);break}
       const tx=Math.floor(o.x/T),ty=Math.floor(o.y/T);
       if(tx<0||ty<0||tx>=W||ty>=H)continue;
@@ -354,6 +366,7 @@ function hurt(e){
   if(P.hp<=0)P.dead=true;
 }
 function hitEnemy(e,m,o){
+  if(e.k==='z'){e.hp-=Math.ceil(kraft);e.fl=.12;if(e.hp<=0){e.dead=1;m.en=m.en.filter(q=>!q.dead);P.won=true}return} // slutbossen: Kraft multiplicerar skadan; besegrad = slutscenen
   if(e.k==='u'){ // sjöborren är oförstörbar men knuffas iväg
     const v=Math.hypot(o.vx,o.vy)||1;e.kx=o.vx/v*230;e.ky=o.vy/v*230;e.fl=.1;
     spark(e.x,e.y-4,6,['#fff2a0','#f5c518','#fff'],110,.25);return;
@@ -361,6 +374,7 @@ function hitEnemy(e,m,o){
   e.hp--;e.fl=.12;
   if(e.hp<=0){
     e.dead=1;spark(e.x,e.y-6,16,['#ff6a2a','#ffb070','#b82a10','#fff'],150,.55);
+    if(e.k==='b')kraft+=1;else if(e.k==='o')kraft=Math.max(1,kraft-.5);
     if(Math.random()<.14)m.items.push({x:e.x,y:e.y,t:0});
     m.en=m.en.filter(q=>!q.dead);
   }
@@ -371,6 +385,7 @@ function ents(dt){
   if(P.kx||P.ky){tryMove(P.kx*dt,0);tryMove(0,P.ky*dt);const f=Math.exp(-9*dt);P.kx*=f;P.ky*=f;if(Math.hypot(P.kx,P.ky)<8)P.kx=P.ky=0}
   for(const e of m.en){
     const dx=P.x-e.x,dy=P.y-e.y,d=Math.hypot(dx,dy),u=e.k==='u',hr=u?9:8;
+    if(e.k==='z'){e.fl=Math.max(0,e.fl-dt);continue} // slutbossen: ingen rörelse, ingen attack
     if(e.k==='o'){oni(e,m,dt);if(P.inv<=0&&!P.dead&&d<17)hurt(e);continue} // lök: egen rörelse och eldklot
     if(e.kx||e.ky){ // knuffad av skott
       const nx=e.x+e.kx*dt,ny=e.y+e.ky*dt;
@@ -549,9 +564,25 @@ function drawOnion(e){ // fet, överväxt schalottenlök med vertikala ränder o
     g.fillStyle='rgba(255,250,200,'+(.5+.4*k)+')';g.beginPath();g.arc(gx,gy,R*.45,0,7);g.fill();
   }
 }
+function drawBoss(e){ // slutbossen: kristallkula, dubbelt så stor som en vanlig fiende, guppar sakta; färg efter hälsa (svart, mörklila, ljuslila)
+  const t=performance.now()/1000,R=19,bob=4+4*Math.sin(t*1.1),f=e.hp/e.hpMax,ph=f>2/3?0:f>1/3?1:2;
+  const cols=[['#6e6e88','#1e1e2c','#08080e','#000'],['#b488e6','#6a2fa8','#3a1566','#1a0833'],['#f2e0ff','#c9a0f0','#9a62d4','#6a3a9c']][ph];
+  const k=1-bob/16;ell('rgba(0,0,0,.4)',e.x,e.y+R-2,R*(.75+.2*k),R*(.22+.05*k)); // markskugga, minst när kulan är högst
+  g.save();g.translate(e.x,e.y-4-bob);
+  g.fillStyle='rgba('+(ph?'170,110,230':'110,110,150')+','+(.10+.05*Math.sin(t*2))+')';g.beginPath();g.arc(0,0,R+5,0,7);g.fill(); // svagt sken
+  const gr=g.createRadialGradient(-7,-8,1.5,0,0,R);
+  gr.addColorStop(0,cols[0]);gr.addColorStop(.3,cols[1]);gr.addColorStop(.75,cols[2]);gr.addColorStop(1,cols[3]);
+  g.fillStyle=gr;g.beginPath();g.arc(0,0,R,0,7);g.fill();
+  g.strokeStyle=ph===0?'#000':'rgba(30,10,60,.8)';g.lineWidth=1;g.stroke();
+  g.strokeStyle='rgba(190,170,255,'+(ph?.35:.22)+')';g.lineWidth=1.6;g.beginPath();g.arc(0,0,R-2,.15*Math.PI,.6*Math.PI);g.stroke(); // reflekterat ljus nedtill till höger
+  ell('rgba(255,255,255,.9)',-7.5,-9,4.2,6.2,-.6);ell('rgba(255,255,255,.75)',-2.5,-14.5,1.4,1.4); // blänk uppe till vänster
+  if(e.fl>0){g.fillStyle='rgba(255,255,255,.7)';g.beginPath();g.arc(0,0,R,0,7);g.fill()}
+  g.restore();
+}
 function drawEnemy(e){
   if(e.k==='u'){drawUrchin(e);return}
   if(e.k==='o'){drawOnion(e);return}
+  if(e.k==='z'){drawBoss(e);return}
   const t=performance.now()/1000,h=1-e.z/36;
   ell('#0007',e.x,e.y+9.5,8.5*h,3.2*h);
   let sx=1,sy=1;
@@ -944,7 +975,7 @@ function update(dt){
   // nyckel och utgång
   if(!L.hasKey&&L.rx===L.key[0]&&L.ry===L.key[1]&&Math.hypot(P.x-W*T/2,P.y-H*T/2)<20){L.hasKey=true;sfx.key()}
   if(L.rx===L.exit[0]&&L.ry===L.exit[1]&&Math.hypot(P.x-W*T/2,P.y-H*T/2)<18){
-    if(L.hasKey){sfx.unlock();const n=L.lv+1;if(n>=100){P.won=true;return}newLevel(hash(L.seed+1,n,7),n);P.x=W*T/2;P.y=H*T/2}
+    if(L.hasKey){sfx.unlock();const n=L.lv+1;if(n>=100){P.won=true;return}newLevel(hash(L.seed+1,n,7),n);P.x=W*T/2;P.y=L.boss?(H-2)*T:H*T/2}
     else if(performance.now()>lockT){sfx.locked();lockT=performance.now()+900}
   }
   if(L.world)for(const p of L.portals)if(p.rx===L.rx&&p.ry===L.ry&&Math.hypot(P.x-p.x,P.y-p.y)<14){lastPortal=p;beginGame(p.lv);return} // portal: in i banan
@@ -1185,6 +1216,8 @@ function hud(){
   g.fillStyle='#000a';g.fillRect(0,0,cv.width,18);
   g.fillStyle='#e8e0d0';g.font='12px "Courier New",monospace';
   g.fillText(L.world?'Världskartan':'Bana '+(L.lv||1)+'   Nyckel: '+(L.hasKey?'ja':'nej'),6,13);
+  g.fillStyle='#8a7fa0';g.textAlign='right';g.fillText('Kraft '+Math.ceil(kraft),cv.width-6,13);g.textAlign='left'; // Kraft uppe till höger, dämpad färg
+  g.fillStyle='#e8e0d0';
   for(let i=0;i<P.max;i++)heart(190+i*13,9.5,5.2,P.hp>=2*i+2?1:P.hp>=2*i+1?.5:0);
   // minikarta
   for(const id of L.seen){const [a,b]=id.split(',').map(Number);
