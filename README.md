@@ -13,6 +13,50 @@ Archive repository for modified versions of the original game. Only changes intr
 
 [https://olaelias.github.io/Valkyria-Advance/](https://olaelias.github.io/Valkyria-Advance/)
 
+## Valkyria11_slutboss.html
+
+# Kraft & Final Boss
+
+## Kraft
+
+**Kraft** is the game's only persistent resource.
+
+- Starts at **1**.
+- Each defeated **Rubber Ball** grants **+1 Kraft**.
+- Each defeated **Onion** grants **−0.5 Kraft**.
+- Can never fall below **1**.
+- Displayed rounded up in the HUD.
+
+Kraft has only one purpose: determining damage dealt to the final boss.
+
+## Final Boss
+
+On level **99**, the normal maze is replaced by a single boss arena.
+
+The boss:
+
+- Has **100 HP**.
+- Does not move.
+- Does not attack.
+- Is surrounded by the maximum number of Onion enemies.
+
+Each hit against the boss deals:
+
+```text
+Damage = ceil(Kraft)
+```
+
+As a result, the player's previous choices directly determine how quickly the boss can be defeated:
+
+- More Rubber Balls → higher Kraft → more damage.
+- More Onions → lower Kraft → less damage.
+
+## Design Intent
+
+Throughout the game, the player continuously gains or loses Kraft.
+
+The final boss is therefore not primarily a test of combat skill, but a test of the path the player chose through the maze.
+
 ## Valkyria8 grottoppning.html
 
 # World Map
